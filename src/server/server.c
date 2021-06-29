@@ -11,6 +11,7 @@ t_file_storage* file_storage;
 config_server config;
 
 int inizializzaFileStorage(char* pathConfig);
+void liberaFile (void* val);
 
 static void *sigHandler(void *arg) {
     sigset_t *set = ((sigHandler_t*)arg)->set;
@@ -141,7 +142,7 @@ int main(int argc,char** argv){
                     break;
                 }
                 else if(fd==readyDescr[0]){
-                    if(readn(fd,&fd_client,sizeof(long))==-1){
+                    if(readn(fd,&fd_client,sizeof(int))==-1){
                         printf("Errore nella lettura della pipe\n");
                         continue;
                     }
@@ -151,13 +152,14 @@ int main(int argc,char** argv){
                 }
                 else{ // nuova richiesta da un client
                     threadW_args* args = malloc(sizeof(threadW_args));
-                    if(args==NULL){
+                    if(args == NULL){
                         perror("Malloc"); //errore fatale
                         return -1;
                     }
                     args->fd_daServire = fd;
                     args->pipe = readyDescr[1];
                     int r=addToThreadPool(threadpool,funcW,(void*)args);
+                    FD_CLR(fd,&set);
                     if(r==0){
                         continue; //richiesta aggiunta correttemente
                     }
@@ -169,6 +171,7 @@ int main(int argc,char** argv){
                         printf("Server troppo occupato\n");
                         free(args);
                     }
+                    
                 }
             }
         }
@@ -183,6 +186,8 @@ int main(int argc,char** argv){
         perror("pthread_join");
         return -1; //errore fatale
     }
+    icl_hash_destroy(file_storage->storage,free,liberaFile);
+    free(file_storage);
     close(readyDescr[0]);
     close(readyDescr[1]);
     unlink(SOCKNAME);
@@ -192,18 +197,18 @@ int main(int argc,char** argv){
 
 int inizializzaFileStorage(char* pathConfig){
     //VALORI DI DEFAULT
-    config.maxNumeroFile=100;
+    config.maxNumeroFile=50;
     config.maxDimbyte=1048576;//10 MB
     config.numThreadsWorker=10;
     config.sockname=SOCKNAME;
-    file_storage=(t_file_storage*)malloc(sizeof(file_storage));
+    file_storage=(t_file_storage*)malloc(sizeof(t_file_storage));
     if(file_storage==NULL){
         perror("malloc");
         return -1;
     }
     file_storage->numeroFile=0;
     file_storage->dimBytes=0;
-    file_storage->storage = icl_hash_create(2*config.maxNumeroFile,NULL,NULL);
+    file_storage->storage = icl_hash_create((2*config.maxNumeroFile),NULL,NULL);
     if(file_storage->storage==NULL){
         free(file_storage);
         perror("malloc");
@@ -217,4 +222,16 @@ int inizializzaFileStorage(char* pathConfig){
         return -1;
     }
     return 0;
+}
+void liberaFile (void* val){
+    t_file* file = (t_file*) val;
+    if(file->contenuto!=NULL)
+        free(file->contenuto);
+    if(distruggiCoda(file->fd,NULL)==-1){
+        printf("Errore distruzione coda\n");
+    }
+    pthread_mutex_destroy(&(file->mtx));
+    pthread_mutex_destroy(&(file->ordering));
+    pthread_cond_destroy(&(file->cond_Go));
+    free(file);
 }
