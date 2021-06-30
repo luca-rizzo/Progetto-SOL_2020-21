@@ -9,6 +9,7 @@
 //Struttura File Server condivisa
 t_file_storage* file_storage;
 config_server config;
+numClientConnessi* numClient;
 
 int inizializzaFileStorage(char* pathConfig);
 void liberaFile (void* val);
@@ -16,7 +17,6 @@ void liberaFile (void* val);
 static void *sigHandler(void *arg) {
     sigset_t *set = ((sigHandler_t*)arg)->set;
     int fd_pipe   = ((sigHandler_t*)arg)->signal_pipe;
-
     for( ;; ) {
 	    int sig;
 	    int r = sigwait(set, &sig);
@@ -28,11 +28,22 @@ static void *sigHandler(void *arg) {
 	    switch(sig) {
 	        case SIGINT:
 	        case SIGQUIT:
-	            printf("ricevuto segnale %s, esco\n", (sig==SIGINT) ? "SIGINT": ((sig==SIGTERM)?"SIGTERM":"SIGQUIT") );
-	            close(fd_pipe);  // notifico il listener thread della ricezione del segnale
+	            printf("ricevuto segnale %s, esco il prima possibile\n", (sig==SIGINT) ? "SIGINT":"SIGQUIT");
+                if(writen(fd_pipe,&sig,sizeof(int))==-1){ //notifico il listener thread della ricezione del segnale indicando quale segnale ho ricevuto
+                    perror("writen");
+                    return NULL;
+                }
+	            close(fd_pipe);  
 	            return NULL;
             case SIGHUP:
-
+                printf("ricevuto segnale %s, esco non appena ho servito tutti i client\n", "SIGHUP");
+                if(writen(fd_pipe,&sig,sizeof(int))==-1){ //notifico il listener thread della ricezione del segnale indicando quale segnale ho ricevuto
+                    perror("writen");
+                    return NULL;
+                }
+	            close(fd_pipe);  
+                config.stato=rifiutaConnessioni;
+	            return NULL;
 	        default:  ; 
 	    }
     }
@@ -40,7 +51,7 @@ static void *sigHandler(void *arg) {
 }
 
 int main(int argc,char** argv){
-    int termina = 0;
+    int r;
     int pfd[2];
     pthread_t sighandler_thread;
     if(pipe(pfd)==-1){
@@ -82,13 +93,26 @@ int main(int argc,char** argv){
     }
     threadpool_t* threadpool=createThreadPool(config.numThreadsWorker, 3*config.numThreadsWorker);
     if (threadpool==NULL){
+        perror("malloc");
         printf("Errore nell'inizializzare il threads pool\n"); //errore fatale
         return -1;
     }
+    //inizializzo variabile numClient
+    numClient= malloc(sizeof(numClientConnessi));
+    if(numClient==NULL){
+        printf("Errore fatale");
+        return -1;
+    }
+    numClient->c=0;
+    if ((pthread_mutex_init(&(numClient->mtx), NULL) != 0)){
+        perror("pthread_mutex_init");
+        return -1;
+    }
+
     long fd_skt,fd_client;
     int fd_num=0;
     struct sockaddr_un sa;
-    (void)unlink(config.sockname);
+    unlink(SOCKNAME);
     strncpy(sa.sun_path, config.sockname , UNIX_PATH_MAX-1);
     sa.sun_family = AF_UNIX;
     if((fd_skt=socket(AF_UNIX, SOCK_STREAM,0))==-1){
@@ -117,11 +141,24 @@ int main(int argc,char** argv){
     if(readyDescr[0]>fd_num){
         fd_num= readyDescr[0];
     }
-    while(!termina){
+    while(config.stato!=termina){
         readset=set;
-        if((select(fd_num+1,&readset,NULL,NULL,NULL))==-1){
+        struct timeval timeout={0, 10000}; // 100 milliseconds
+        if((r=select(fd_num+1,&readset,NULL,NULL,&timeout))<0){ 
             perror("select");
             return -1; //errore fatale
+        }
+        if(r==0){
+            if(config.stato==rifiutaConnessioni){
+                int clientAttivi;
+                if((clientAttivi=modificaNumClientConnessi(0))==-1){
+                    perror("lock");
+                    return -1;
+                }
+                if(clientAttivi==0)
+                    break;
+            }
+            continue;
         }
         for(long fd=0;fd<=fd_num;fd++){
             if(FD_ISSET(fd,&readset)){
@@ -131,14 +168,28 @@ int main(int argc,char** argv){
                         return -1;
                     }
                     printf("Connessione accettata\n");
+                    if(modificaNumClientConnessi(1)==-1){
+                        perror("modificaNumClientConnessi");
+                        return -1; //errore fatale
+                    }
                     FD_SET(fd_client,&set);
                     if(fd_client>fd_num)
                         fd_num=fd_client;
                 }
                 else if(fd==pfd[0]){
+                    int sig;
+                    if(readn(fd,&sig,sizeof(int))==-1){
+                        perror("readn");
+                        return -1; //setta errno
+                    }
+                    if(sig==SIGINT || sig==SIGQUIT)
+                        config.stato=termina;
+                    else{
+                        config.stato=rifiutaConnessioni;
+                        FD_CLR(fd_skt,&set); // non accettare nuove connessioni
+                    }
                     close(pfd[0]);
-                    printf("TERMINO\n");
-                    termina=1;
+                    FD_CLR(pfd[0],&set);
                     break;
                 }
                 else if(fd==readyDescr[0]){
@@ -178,7 +229,7 @@ int main(int argc,char** argv){
     }
     printf("Notifico threads che ho finito\n");
     if(destroyThreadPool(threadpool,0)==-1){
-        printf("Errore nella cancellazione del threads pool");
+        printf("Errore nella cancellazione del threads pool\n");
     }
     int err;
     if((err=(pthread_join(sighandler_thread,NULL)))!=0){
@@ -187,13 +238,17 @@ int main(int argc,char** argv){
         return -1; //errore fatale
     }
     icl_hash_destroy(file_storage->storage,free,liberaFile);
+    //distruggo numClient
+    pthread_mutex_destroy(&(numClient->mtx));
+    free(numClient);
     free(file_storage);
+    (void)unlink(config.sockname);
     close(readyDescr[0]);
     close(readyDescr[1]);
+    close(fd_skt);
     unlink(SOCKNAME);
     return 0;
 }
-
 
 int inizializzaFileStorage(char* pathConfig){
     //VALORI DI DEFAULT
@@ -201,6 +256,7 @@ int inizializzaFileStorage(char* pathConfig){
     config.maxDimbyte=1048576;//10 MB
     config.numThreadsWorker=10;
     config.sockname=SOCKNAME;
+    config.stato=attivo;
     file_storage=(t_file_storage*)malloc(sizeof(t_file_storage));
     if(file_storage==NULL){
         perror("malloc");
@@ -234,4 +290,11 @@ void liberaFile (void* val){
     pthread_mutex_destroy(&(file->ordering));
     pthread_cond_destroy(&(file->cond_Go));
     free(file);
+}
+int modificaNumClientConnessi(int incr){
+    int r;
+    LOCK_RETURN(&(numClient->mtx),-1);
+    r=(numClient->c+=incr);
+    UNLOCK_RETURN(&(numClient->mtx),-1);
+    return r;
 }
