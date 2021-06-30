@@ -176,7 +176,24 @@ int writeFile(const char* pathname, const char* dirname){
             return -1;
         }
         return -1;
+    } //posso inviare il file?
+    int res;
+    if(readn(fd_skt,&res,sizeof(int))==-1){ //leggo il risultato dell'operazione fino a questo punto
+        free(buffer);
+        if(fclose(ifp)!=0){
+            return -1;
+        }
+        return -1;
     }
+    if(res!=0){
+        free(buffer);
+        if(fclose(ifp)!=0){
+            return -1;
+        }
+        errno=res;
+        return -1;
+    } //posso inviare il file
+
     //secondo il protocollo di comunicazione invio dimensione file e contenuto
     if(writen(fd_skt,&size,sizeof(size_t))==-1){
         free(buffer);
@@ -192,7 +209,6 @@ int writeFile(const char* pathname, const char* dirname){
         }
         return -1;
     }
-    int res;
     if(readn(fd_skt,&res,sizeof(int))==-1){ //leggo il risultato dell'operazione
         free(buffer);
         if(fclose(ifp)!=0){
