@@ -4,7 +4,7 @@
 #include <server.h>
 #include <threadpool.h>
 #include<threadW.h>
-
+#include<conn.h>
 #define UNIX_PATH_MAX 108
 //Struttura File Server condivisa
 t_file_storage* file_storage;
@@ -13,6 +13,7 @@ numClientConnessi* numClient;
 
 int inizializzaFileStorage(char* pathConfig);
 void liberaFile (void* val);
+int updatemax(fd_set set, int fdmax);
 
 static void *sigHandler(void *arg) {
     sigset_t *set = ((sigHandler_t*)arg)->set;
@@ -211,6 +212,8 @@ int main(int argc,char** argv){
                     args->pipe = readyDescr[1];
                     int r=addToThreadPool(threadpool,funcW,(void*)args);
                     FD_CLR(fd,&set);
+                    if (fd == fd_num) 
+                        fdmax = updatemax(set, fdmax);
                     if(r==0){
                         continue; //richiesta aggiunta correttemente
                     }
@@ -221,8 +224,7 @@ int main(int argc,char** argv){
                     else{
                         printf("Server troppo occupato\n");
                         free(args);
-                    }
-                    
+                    }  
                 }
             }
         }
@@ -297,4 +299,12 @@ int modificaNumClientConnessi(int incr){
     r=(numClient->c+=incr);
     UNLOCK_RETURN(&(numClient->mtx),-1);
     return r;
+}
+// ritorno l'indice massimo tra i descrittori attivi
+int updatemax(fd_set set, int fdmax) {
+    for(int i=(fdmax-1);i>=0;--i)
+	    if (FD_ISSET(i, &set)) 
+            return i;
+    assert(1==0);
+    return -1;
 }
