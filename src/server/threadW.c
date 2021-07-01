@@ -1,19 +1,16 @@
 #include<util.h>
 #include<threadW.h>
-#include <icl_hash.h>
 #include<server.h>
 #include<coda.h>
-//funzioni di scrittura e lettura di un file in muta esclusione
-int startRead(t_file* file);
-int doneRead(t_file* file);
-int startWrite(t_file* file);
-int doneWrite(t_file* file);
 
-int OpenFile(int fd_client);
-int ReadFile(int fd_client);
-int WriteFile(int fd_client);
-int RemoveFile(int fd_client);
-int CloseFile(int fd_client);
+
+static int OpenFile(int fd_client);
+static int ReadFile(int fd_client);
+static int WriteFile(int fd_client);
+static int RemoveFile(int fd_client);
+static int CloseFile(int fd_client);
+static int AppendToFile(int fd_client);
+static int CloseConnection(int fd_client);
 
 void funcW(void* arg){
     threadW_args* args= (threadW_args*) arg;
@@ -33,10 +30,9 @@ void funcW(void* arg){
     } 
     if(nread==0){
         nonAggiungereFd=1; // non devo segnalare il server che deve riascoltare fd
-        if(close(fd_client)==-1){
-            perror("Close");
+        if(CloseConnection(fd_client)==-1){
+            perror("CloseConnection");
         }
-        printf("Connessione terminata\n");
     }
     else{
         switch(operazione){
@@ -48,11 +44,9 @@ void funcW(void* arg){
                     }
                     if(errno==EBADMSG){
                         nonAggiungereFd=1; // non devo segnalare il server che deve riascoltare fd: errore nel protocollo di comunicazione
-                        if(close(fd_client)==-1){
-                            perror("Close");
-                            return;
+                        if(CloseConnection(fd_client)==-1){
+                            perror("CloseConnection");
                         }
-                        printf("Connessione terminata\n");
                     }
                 }
                 else{
@@ -70,27 +64,41 @@ void funcW(void* arg){
                     }
                     if(errno==EBADMSG){
                         nonAggiungereFd=1; // non devo segnalare il server che deve riascoltare fd: errore nel protocollo di comunicazione
-                        if(close(fd_client)==-1){
-                            perror("Close");
-                            return;
+                        if(CloseConnection(fd_client)==-1){
+                            perror("CloseConnection");
                         }
-                        printf("Connessione terminata\n");
                     }
                 }
                 break;
             case wr:
                 if(WriteFile(fd_client)==-1){
-                    
                     if(writen(fd_client,&errno,sizeof(int))==-1){//invio errore
                         perror("writen");
                     }
                     if(errno==EBADMSG){
                         nonAggiungereFd=1; // non devo segnalare il server che deve riascoltare fd: errore nel protocollo di comunicazione
-                        if(close(fd_client)==-1){
-                            perror("Close");
-                            return;
+                        if(CloseConnection(fd_client)==-1){
+                            perror("CloseConnection");
                         }
-                        printf("Connessione terminata\n");
+                    }
+                }
+                else{
+                    int r=0;
+                    if(writen(fd_client,&r,sizeof(int))==-1){//invio operazione completata!
+                        perror("writen");
+                    }
+                }
+                break;
+            case ap:
+                if(AppendToFile(fd_client)==-1){
+                    if(writen(fd_client,&errno,sizeof(int))==-1){//invio errore
+                        perror("writen");
+                    }
+                    if(errno==EBADMSG){
+                        nonAggiungereFd=1; // non devo segnalare il server che deve riascoltare fd: errore nel protocollo di comunicazione
+                        if(CloseConnection(fd_client)==-1){
+                            perror("CloseConnection");
+                        }
                     }
                 }
                 else{
@@ -108,11 +116,9 @@ void funcW(void* arg){
                     }
                     if(errno==EBADMSG){
                         nonAggiungereFd=1; // non devo segnalare il server che deve riascoltare fd: errore nel protocollo di comunicazione
-                        if(close(fd_client)==-1){
-                            perror("Close");
-                            return;
+                        if(CloseConnection(fd_client)==-1){
+                            perror("CloseConnection");
                         }
-                        printf("Connessione terminata\n");
                     }
                 }
                 else{
@@ -124,17 +130,14 @@ void funcW(void* arg){
                 break;
             case cl:
                 if(CloseFile(fd_client)==-1){
-                    
                     if(writen(fd_client,&errno,sizeof(int))==-1){//invio errore
                         perror("writen");
                     }
                     if(errno==EBADMSG){
                         nonAggiungereFd=1; // non devo segnalare il server che deve riascoltare fd: errore nel protocollo di comunicazione
-                        if(close(fd_client)==-1){
-                            perror("Close");
-                            return;
+                        if(CloseConnection(fd_client)==-1){
+                            perror("CloseConnection");
                         }
-                        printf("Connessione terminata\n");
                     }
                 }
                 else{
@@ -206,6 +209,9 @@ int OpenFile(int fd_client){
         return -1;
     }
     buffer=malloc(len);
+    if(buffer==NULL){
+        return -1;
+    }
     if((nread=readn(fd_client,buffer,len))==-1){
         free(buffer);
         return -1; //setta errno
@@ -225,7 +231,7 @@ int OpenFile(int fd_client){
         return -1;
     }
     LOCK_RETURN(&(file_storage->mtx),-1);
-    //printf("%s\n",(char*) buffer);
+    
     t_file* file = icl_hash_find(file_storage->storage, buffer);
     if(file!=NULL){
         if(flag==O_CREAT){
@@ -241,15 +247,22 @@ int OpenFile(int fd_client){
             }
             UNLOCK_RETURN(&(file_storage->mtx),-1);
             nodo* p = (nodo*) malloc(sizeof(nodo));
-            p->val = (void*)(&fd_client);
+            p->val = malloc(sizeof(int));
+            if(p->val==NULL){
+                free(p);
+                doneWrite(file);
+                free(buffer);
+                return -1;
+            }
+            *((int*)p->val)=fd_client;
             p->next = NULL;
-            // if(isInCoda(file->fd, &fd_client)){//l'utente ha già aperto il file?
-            //     free(p);
-            //     errno=EIO;
-            //     doneWrite(file);
-            //     free(buffer);
-            //     return -1;
-            // }
+            if(isInCoda(file->fd, &fd_client)){//l'utente ha già aperto il file?
+                free(p);
+                errno=EIO;
+                doneWrite(file);
+                free(buffer);
+                return -1;
+            }
             aggiungiInCoda(file->fd,p); //aggiungo fd alla lista di client che hanno aperto il file
             file->ultima_operazione=op;
             if(doneWrite(file)==-1){
@@ -268,15 +281,34 @@ int OpenFile(int fd_client){
             return -1;
         }
         if(file_storage->numeroFile==config.maxNumeroFile){
-            //politicaDiSostituzione
+            if(espelliFile(NULL)==-1){
+                errno=EPROTO;
+                free(buffer);
+                UNLOCK_RETURN(&(file_storage->mtx),-1);
+                return -1;
+            }
         }
-        file_storage->numeroFile++;
         //creo un nuovo file
         t_file* file = malloc(sizeof(t_file));
         if(file==NULL){
+            free(buffer);
             UNLOCK_RETURN(&(file_storage->mtx),-1);
             return -1;
         }
+        if(clock_gettime(CLOCK_MONOTONIC,&(file->tempoCreazione))==-1){
+            free(buffer);
+            free(file);
+            UNLOCK_RETURN(&(file_storage->mtx),-1);
+            return -1;
+        }
+        file->path = malloc(len);
+        if (file->path==NULL) {
+            free(buffer);
+            free(file);
+            UNLOCK_RETURN(&(file_storage->mtx),-1);
+            return -1;
+        }
+        strncpy(file->path,buffer,len);
         file->contenuto=NULL;
         file->dimByte=0;
         file->scrittoriAttivi=0;
@@ -290,12 +322,20 @@ int OpenFile(int fd_client){
             return -1;
         }
         nodo* p = (nodo*) malloc(sizeof(nodo));
-        p->val = (void*)(&fd_client);
+        p->val = malloc(sizeof(int));
+        if(p->val==NULL){
+            distruggiCoda(file->fd,NULL);
+            free(buffer);
+            free(file);
+            free(p);
+            UNLOCK_RETURN(&(file_storage->mtx),-1);
+	        return -1;
+        }
+        *((int*)p->val)=fd_client;
         p->next = NULL;
         aggiungiInCoda(file->fd,p); //aggiungo fd alla lista di client che hanno aperto il file
         file->ultima_operazione=cr;
         if ((pthread_mutex_init(&(file->mtx), NULL) != 0) || (pthread_mutex_init(&(file->ordering), NULL) != 0) || (pthread_cond_init(&(file->cond_Go), NULL) != 0))  {
-	        errno=EIO;
             distruggiCoda(file->fd,NULL);
             free(buffer);
             free(file);
@@ -313,6 +353,7 @@ int OpenFile(int fd_client){
             UNLOCK_RETURN(&(file_storage->mtx),-1);
 	        return -1;
         }
+        file_storage->numeroFile++;
         UNLOCK_RETURN(&(file_storage->mtx),-1);
         return 0;
     }
@@ -331,6 +372,9 @@ int ReadFile(int fd_client){
         return -1;
     }
     buffer=malloc(len);
+    if(buffer==NULL){
+        return -1;
+    }
     if((nread=readn(fd_client,buffer,len))==-1){
         return -1; //setta errno
     }
@@ -391,6 +435,9 @@ int WriteFile(int fd_client){
         return -1;
     }
     buffer=malloc(len);
+    if(buffer==NULL){
+        return -1;
+    }
     if((nread=readn(fd_client,buffer,len))==-1){
         return -1; //setta errno
     }
@@ -436,14 +483,14 @@ int WriteFile(int fd_client){
         errno=EBADMSG;
         return -1;
     }
-    if(size>config.maxDimbyte){ //il file è troppo grande
-        errno=EFBIG;
+    buffer=malloc(size); 
+    if(buffer==NULL){
         SYSCALLRETURN(doneWrite(file),-1);
         UNLOCK_RETURN(&(file_storage->mtx),-1);
         return -1;
     }
-    buffer=malloc(size); 
     if((nread=readn(fd_client,buffer,size))==-1){ //leggo contenuto
+        free(buffer);
         SYSCALLRETURN(doneWrite(file),-1);
         UNLOCK_RETURN(&(file_storage->mtx),-1);
         return -1; //setta errno
@@ -455,15 +502,33 @@ int WriteFile(int fd_client){
         errno=EBADMSG;
         return -1;
     }
-    if(file_storage->dimBytes+size>config.maxDimbyte){ //il file entra nel nostro storage o dobbiamo eliminare qualche file secondo la politica adottata?
-        while(file_storage->dimBytes+size>config.maxDimbyte){
-            //politica di rimpiazzamento
+    if(size>config.maxDimbyte){ //il file è troppo grande
+        errno=EFBIG;
+        free(buffer);
+        SYSCALLRETURN(doneWrite(file),-1);
+        UNLOCK_RETURN(&(file_storage->mtx),-1);
+        return -1;
+    }
+    //il file potrebbe entrare nel file storage
+    while(file_storage->dimBytes+size>config.maxDimbyte){//il file entra nel nostro storage o dobbiamo eliminare qualche file secondo la politica adottata?
+        if(espelliFile(file)==-1){
+            errno=EPROTO;
+            free(buffer);
+            SYSCALLRETURN(doneWrite(file),-1);
+            UNLOCK_RETURN(&(file_storage->mtx),-1);
+            return -1;
         }
     }
     //il file entra nel nostro file storage
     file_storage->dimBytes+=size;
     UNLOCK_RETURN(&(file_storage->mtx),-1);
     file->contenuto = malloc(size);
+    if(file->contenuto==NULL){
+        free(buffer);
+        SYSCALLRETURN(doneWrite(file),-1);
+        UNLOCK_RETURN(&(file_storage->mtx),-1);
+        return -1;
+    }
     memcpy(file->contenuto,buffer,size);
     file->ultima_operazione=wr;
     file->dimByte=size;
@@ -485,6 +550,9 @@ int RemoveFile(int fd_client){
         return -1;
     }
     buffer=malloc(len);
+    if(buffer==NULL){
+        return -1;
+    }
     if((nread=readn(fd_client,buffer,len))==-1){
         return -1; //setta errno
     }
@@ -512,7 +580,7 @@ int RemoveFile(int fd_client){
     int size = file->dimByte;
     if(icl_hash_delete(file_storage->storage,(void*) buffer,free,liberaFile)==-1){
         free(buffer);
-        errno=EPROTONOSUPPORT;
+        errno=EPROTO;
         SYSCALLRETURN(doneWrite(file),-1);
         UNLOCK_RETURN(&(file_storage->mtx),-1);
         return -1;
@@ -539,6 +607,9 @@ int CloseFile(int fd_client){ //chiudere un file==rimuovere l'fd del client dall
         return -1;
     }
     buffer=malloc(len);
+    if(buffer==NULL){
+        return -1;
+    }
     if((nread=readn(fd_client,buffer,len))==-1){
         return -1; //setta errno
     }
@@ -565,12 +636,167 @@ int CloseFile(int fd_client){ //chiudere un file==rimuovere l'fd del client dall
     }
     if(rimuoviDaCoda(file->fd,&fd_client,NULL)==-1){
         free(buffer);
-        errno=EPROTONOSUPPORT; //errore di protocollo interno
+        errno=EPROTO; //errore di protocollo interno
         SYSCALLRETURN(doneWrite(file),-1);
         UNLOCK_RETURN(&(file_storage->mtx),-1);
         return -1;
     }
+    free(buffer);
     SYSCALLRETURN(doneWrite(file),-1);
     UNLOCK_RETURN(&(file_storage->mtx),-1);
+    return 0;
+}
+int AppendToFile(int fd_client){
+    //secondo il protocollo di comunicazione leggo lunghezza path e contenuto path 
+    int len;  
+    void* buffer;
+    int nread;
+    if((nread=readn(fd_client,&len,sizeof(int)))==-1){
+        return -1; //setta errno
+    }
+    if(nread==0){
+        errno=EBADMSG;
+        return -1;
+    }
+    buffer=malloc(len);
+    if(buffer==NULL){
+        return -1;
+    }
+    if((nread=readn(fd_client,buffer,len))==-1){
+        return -1; //setta errno
+    }
+    if(nread==0){
+        free(buffer);
+        errno=EBADMSG;
+        return -1;
+    }
+    LOCK_RETURN(&(file_storage->mtx),-1);
+    t_file* file = icl_hash_find(file_storage->storage, buffer);
+    if(file==NULL){
+        free(buffer);
+        UNLOCK_RETURN(&(file_storage->mtx),-1);
+        errno=ENOENT; //il file non esiste
+        return -1;
+    }
+    free(buffer);
+    SYSCALLRETURN(startWrite(file),-1);
+    if(!isInCoda(file->fd,&fd_client)){ //devi avere aperto il file
+        errno=EACCES;
+        SYSCALLRETURN(doneWrite(file),-1);
+        UNLOCK_RETURN(&(file_storage->mtx),-1);
+        return -1;
+    }
+    int r=0; 
+    if(writen(fd_client,&r,sizeof(int))==-1){//comunico al client che può inviare il contenuto da aggiungere al file
+        SYSCALLRETURN(doneWrite(file),-1);
+        UNLOCK_RETURN(&(file_storage->mtx),-1);
+        return -1;
+    }
+    //secondo il protocollo di comunicazione leggo dimensione in byte e contenuto
+    size_t size;
+    if((nread=readn(fd_client,&size,sizeof(size_t)))==-1){
+        return -1; //setta errno
+    }
+    if(nread==0){
+        errno=EBADMSG;
+        return -1;
+    }
+    buffer=malloc(size); 
+    if(buffer==NULL){
+        SYSCALLRETURN(doneWrite(file),-1);
+        UNLOCK_RETURN(&(file_storage->mtx),-1);
+        return -1;
+    }
+    if((nread=readn(fd_client,buffer,size))==-1){ //leggo contenuto
+        free(buffer);
+        SYSCALLRETURN(doneWrite(file),-1);
+        UNLOCK_RETURN(&(file_storage->mtx),-1);
+        return -1; //setta errno
+    }
+    if(nread==0){
+        SYSCALLRETURN(doneWrite(file),-1);
+        UNLOCK_RETURN(&(file_storage->mtx),-1);
+        free(buffer);
+        errno=EBADMSG;
+        return -1;
+    }
+    if(file->dimByte + size > config.maxDimbyte){ //il file con i byte da appendere è troppo grande!
+        errno=EFBIG;
+        free(buffer);
+        SYSCALLRETURN(doneWrite(file),-1);
+        UNLOCK_RETURN(&(file_storage->mtx),-1);
+        return -1;
+    }
+    //il file potrebbe entrare nel fileStorage
+    while(file_storage->dimBytes + size >config.maxDimbyte){ //dobbiamo eliminare qualche file?
+        if(espelliFile(file)==-1){
+            errno=EPROTO;
+            free(buffer);
+            SYSCALLRETURN(doneWrite(file),-1);
+            UNLOCK_RETURN(&(file_storage->mtx),-1);
+            return -1;
+        }
+    }
+    //il contenuto può essere appeso al file
+    file_storage->dimBytes+=size;
+    UNLOCK_RETURN(&(file_storage->mtx),-1);
+    int newDim;
+    if(file->dimByte==0){
+        newDim=size;
+        file->contenuto = malloc(size);
+        if(file->contenuto==NULL){
+            free(buffer);
+            SYSCALLRETURN(doneWrite(file),-1);
+            UNLOCK_RETURN(&(file_storage->mtx),-1);
+            return -1;
+        }
+        memcpy(file->contenuto,buffer,size);
+    }
+    else{
+        newDim=file->dimByte+size;
+        if((file->contenuto=realloc(file->contenuto, newDim))==NULL){
+            free(buffer);
+            SYSCALLRETURN(doneWrite(file),-1);
+            UNLOCK_RETURN(&(file_storage->mtx),-1);
+            return -1;
+        }
+        memcpy(((char *)(file->contenuto) + file->dimByte),buffer,size);
+    }
+    file->dimByte=newDim;
+    file->ultima_operazione=ap;
+    free(buffer);
+    SYSCALLRETURN(doneWrite(file),-1);
+    return 0;
+}
+int CloseConnection(int fd_client){ //tolgo l'fd_client dalla lista fd di ogni file: se non lo facessi, la accept potrebbe ritornare lo stesso fd per due client diversi e avrei comportamenti anomali
+    LOCK_RETURN(&(file_storage->mtx),-1);
+    icl_entry_t *bucket, *curr, *next;
+    t_file* file;
+    int i;
+    icl_hash_t *ht = file_storage->storage;
+    for (i=0; i<ht->nbuckets; i++) {
+        bucket = ht->buckets[i];
+        for (curr=bucket; curr!=NULL; ) {
+            next=curr->next;
+            file=(t_file*) curr->data;
+            SYSCALLRETURN(startWrite(file),-1);
+            if(isInCoda(file->fd,&fd_client)){ //devi avere aperto il file
+                if(rimuoviDaCoda(file->fd,&fd_client,NULL)==-1){
+                    errno=EPROTO; //errore di protocollo interno
+                    SYSCALLRETURN(doneWrite(file),-1);
+                    UNLOCK_RETURN(&(file_storage->mtx),-1);
+                    return -1;
+                }
+            }
+            SYSCALLRETURN(doneWrite(file),-1);
+            curr=next;
+        }
+    }
+    UNLOCK_RETURN(&(file_storage->mtx),-1);
+    modificaNumClientConnessi(-1);
+    if(close(fd_client)==-1){
+        perror("Close");
+    }
+    printf("Connessione terminata\n");
     return 0;
 }
