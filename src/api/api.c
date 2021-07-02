@@ -2,27 +2,63 @@
 #include<api.h>
 #include<conn.h>
 int fd_skt=-1;
-char* socketname=NULL;
+const char* socketname=NULL;
 static char* ottieniNomeDaPath(char* path);
 int isDirectory(const char* file);
+static struct timespec difftimespec(struct timespec begin, struct timespec end);
+static int BThenA(struct timespec a,struct timespec b);
+
 int openConnection(const char* sockname, int msec, const struct timespec abstime){
+    if(fd_skt!=-1){ //sei già connesso
+        errno=EISCONN;
+        return -1;
+    }
+    if(sockname==NULL){ //parametri invalidi
+        errno=EINVAL;
+        return -1;
+    }
+    int res;
     struct sockaddr_un sa;
-    int len=strlen(sockname);
-    NULLSYSCALL(socketname, malloc(len+1),"malloc");
-    strncpy(socketname, sockname, len+1);
-    strncpy(sa.sun_path, socketname, len+1);
+    memset(&sa, '0', sizeof(sa));
+    struct timespec timeToRetry,tempoInizio,tempoCorrente,tempoPassato;
+    timeToRetry.tv_sec = msec / 1000;
+    timeToRetry.tv_nsec = (msec % 1000) * 1000000;
+    if(strlen(sockname)+1 > UNIX_PATH_MAX){ //sockname deve essere lungo al massimo UNIX_PATH_MAX
+        errno=EINVAL;
+        return -1;
+    }
+    strncpy(sa.sun_path, sockname, UNIX_PATH_MAX);
     sa.sun_family = AF_UNIX;
-    NEGSYSCALL(fd_skt,socket(AF_UNIX, SOCK_STREAM,0),"socket");
-    while(connect(fd_skt,(struct sockaddr *) &sa, sizeof(sa)) == -1){
-        if(errno == ENOENT){
-            printf("ciaoo\n");
-            sleep(10);
-            continue;
-        }
-        else{
+    if((fd_skt=socket(AF_UNIX, SOCK_STREAM,0))==-1){
+        return -1;
+    }
+    if(clock_gettime(CLOCK_MONOTONIC,&tempoInizio)==-1){//inizializzo tempo inizio
+        fd_skt=-1;
+        return -1;
+    }
+    if(clock_gettime(CLOCK_MONOTONIC,&tempoCorrente)==-1){//inizializzo tempo corrente
+        fd_skt=-1;
+        return -1;
+    }
+    tempoPassato=difftimespec(tempoInizio,tempoCorrente);
+    while(BThenA(abstime,tempoPassato) && (res=connect(fd_skt,(struct sockaddr *) &sa, sizeof(sa))) == -1){
+        fprintf(stdout,"Provo a ricollegarmi\n");
+        if(nanosleep(&timeToRetry,NULL)!=0){
+            fd_skt=-1;
             return -1;
         }
+        if(clock_gettime(CLOCK_MONOTONIC,&tempoCorrente)==-1){//aggiorno tempo corrente
+            fd_skt=-1;
+            return -1;
+        }
+        tempoPassato=difftimespec(tempoInizio,tempoCorrente);
     }
+    if(res==-1){
+        fd_skt=-1;
+        errno = ETIMEDOUT;
+        return -1;
+    }
+    socketname=sockname;
     return 0;
 }
 int closeConnection(const char* sockname){//comunico al server che chiudo la connessione
@@ -33,7 +69,6 @@ int closeConnection(const char* sockname){//comunico al server che chiudo la con
     }
     int notused;
     NEGSYSCALL(notused, close(fd_skt), "close");
-    free(socketname);
     socketname=NULL;
     fd_skt=-1;
     return 0;
@@ -460,4 +495,17 @@ static char* ottieniNomeDaPath(char* path){
     if( (name = strrchr(path, '/')) == NULL )
         name = path;
     return name;
+}
+static struct timespec difftimespec(struct timespec begin, struct timespec end){
+    struct timespec timepass;
+    timepass.tv_sec=end.tv_sec - begin.tv_sec;
+    timepass.tv_nsec=end.tv_nsec - begin.tv_nsec;
+    return timepass;
+}
+//ritorna 1 se b è avvenuto prima di a
+static int BThenA(struct timespec a,struct timespec b) {
+    if (a.tv_sec == b.tv_sec)
+        return a.tv_nsec > b.tv_nsec;
+    else
+        return a.tv_sec > b.tv_sec;
 }
