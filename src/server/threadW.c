@@ -11,6 +11,7 @@ static int RemoveFile(int fd_client);
 static int CloseFile(int fd_client);
 static int AppendToFile(int fd_client);
 static int CloseConnection(int fd_client);
+static int ReadNFile(int fd_client);
 
 void funcW(void* arg){
     threadW_args* args= (threadW_args*) arg;
@@ -144,6 +145,19 @@ void funcW(void* arg){
                     int r=0;
                     if(writen(fd_client,&r,sizeof(int))==-1){//invio operazione completata!
                         perror("writen");
+                    }
+                }
+                break;
+            case rn:
+                if(ReadNFile(fd_client)==-1){
+                    if(writen(fd_client,&errno,sizeof(int))==-1){//invio errore
+                        perror("writen");
+                    }
+                    if(errno==EBADMSG){
+                        nonAggiungereFd=1; // non devo segnalare il server che deve riascoltare fd: errore nel protocollo di comunicazione
+                        if(CloseConnection(fd_client)==-1){
+                            perror("CloseConnection");
+                        }
                     }
                 }
                 break;
@@ -770,14 +784,13 @@ int AppendToFile(int fd_client){
 }
 int CloseConnection(int fd_client){ //tolgo l'fd_client dalla lista fd di ogni file: se non lo facessi, la accept potrebbe ritornare lo stesso fd per due client diversi e avrei comportamenti anomali
     LOCK_RETURN(&(file_storage->mtx),-1);
-    icl_entry_t *bucket, *curr, *next;
+    icl_entry_t *bucket, *curr;
     t_file* file;
     int i;
     icl_hash_t *ht = file_storage->storage;
     for (i=0; i<ht->nbuckets; i++) {
         bucket = ht->buckets[i];
         for (curr=bucket; curr!=NULL; ) {
-            next=curr->next;
             file=(t_file*) curr->data;
             SYSCALLRETURN(startWrite(file),-1);
             if(isInCoda(file->fd,&fd_client)){ //devi avere aperto il file
@@ -789,7 +802,7 @@ int CloseConnection(int fd_client){ //tolgo l'fd_client dalla lista fd di ogni f
                 }
             }
             SYSCALLRETURN(doneWrite(file),-1);
-            curr=next;
+            curr=curr->next;
         }
     }
     UNLOCK_RETURN(&(file_storage->mtx),-1);
@@ -798,5 +811,83 @@ int CloseConnection(int fd_client){ //tolgo l'fd_client dalla lista fd di ogni f
         perror("Close");
     }
     printf("Connessione terminata\n");
+    return 0;
+}
+static int ReadNFile(int fd_client){
+    int n;
+    int nread;
+    int numFileDaInviare;
+    if((nread=readn(fd_client,&n,sizeof(int)))==-1){ //secondo il protocolo di comunicazione leggo il numero di file da leggere
+        errno=EBADMSG;
+        return -1;
+    }
+    LOCK_RETURN(&(file_storage->mtx),-1);
+    if(n<0){
+        numFileDaInviare = file_storage->numeroFile;
+    }
+    else{
+        numFileDaInviare= MIN(file_storage->numeroFile,n);
+    }
+    int c=0;
+    t_coda* fileDaInviare=inizializzaCoda(NULL);
+    if(fileDaInviare==NULL){
+        errno=EPROTO;
+        return -1;
+    }
+    icl_entry_t *bucket, *curr;
+    t_file* file;
+    icl_hash_t *ht = file_storage->storage;
+    for (int i=0; i<ht->nbuckets; i++) {
+        bucket = ht->buckets[i];
+        for (curr=bucket; curr!=NULL; ) {
+            file=(t_file*) curr->data;
+            SYSCALLRETURN(startRead(file),-1);
+            nodo* p=malloc(sizeof(nodo));
+            p->next=NULL;
+            p->val=(void*)file;
+            aggiungiInCoda(fileDaInviare,p);
+            c++;
+            if(c==numFileDaInviare)
+                break;
+            curr=curr->next;
+        }
+        if(c==numFileDaInviare)
+            break;
+    }
+    UNLOCK_RETURN(&(file_storage->mtx),-1);
+    //comunico al client il numero di file letti con successo
+    if(writen(fd_client,&numFileDaInviare,sizeof(int))==-1){
+        distruggiCoda(fileDaInviare,NULL);
+        return -1;
+    }
+    nodo* p=prelevaDaCoda(fileDaInviare);
+    while(p!=NULL){
+        t_file* file=(t_file*) p->val;
+        //secondo il protocollo di comunicazione invio lunghezza path e path del file da scrivere
+        int len=strlen(file->path)+1;
+        if(writen(fd_client, &len,sizeof(int))==-1){
+            distruggiCoda(fileDaInviare,NULL);
+            return -1;
+        }
+        if(writen(fd_client,(void*)file->path,len)==-1){
+            distruggiCoda(fileDaInviare,NULL);
+            return -1;
+        }
+        //secondo il protocollo di comunicazione invio dimensione file e contenuto file da scrivere
+        if(writen(fd_client, &(file->dimByte),sizeof(size_t))==-1){
+            distruggiCoda(fileDaInviare,NULL);
+            return -1;
+        }
+        if(file->dimByte>0){//se il file non è vuoto invio contenuto
+            if(writen(fd_client, file->contenuto, file->dimByte)==-1){
+                distruggiCoda(fileDaInviare,NULL);
+                return -1;
+            }
+        }
+        free(p);
+        p=prelevaDaCoda(fileDaInviare);
+        SYSCALLRETURN(doneRead(file),-1);
+    }
+    distruggiCoda(fileDaInviare,NULL);
     return 0;
 }
