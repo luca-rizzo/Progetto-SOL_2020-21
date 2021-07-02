@@ -3,6 +3,8 @@
 #include<conn.h>
 int fd_skt=-1;
 char* socketname=NULL;
+static char* ottieniNomeDaPath(char* path);
+int isDirectory(const char* file);
 int openConnection(const char* sockname, int msec, const struct timespec abstime){
     struct sockaddr_un sa;
     int len=strlen(sockname);
@@ -23,7 +25,7 @@ int openConnection(const char* sockname, int msec, const struct timespec abstime
     }
     return 0;
 }
-int closeConnection(const char* sockname){
+int closeConnection(const char* sockname){//comunico al server che chiudo la connessione
     int len=strlen(sockname);
     if(strncmp(sockname,socketname,len+1)!=0){
         errno=ENOTCONN;
@@ -100,13 +102,23 @@ int readFile(const char* pathname, void** buf, size_t* size){
     } 
     //l'operazione è terminata correttamente
     size_t dim;
-    if(readn(fd_skt,&dim,sizeof(size_t))==-1){ //leggo la dimensione del file
+    int nread;
+    if((nread=readn(fd_skt,&dim,sizeof(size_t)))==-1){ //leggo la dimensione del file
+        return -1;
+    }
+    if(nread==0){
+        errno = EBADMSG;
         return -1;
     }
     void* buffer=NULL;
     if(dim!=0){
         buffer=malloc(dim); //alloco un buffer di tale dimensione
         if(readn(fd_skt,buffer,dim)==-1){ //leggo contenuto file
+            return -1;
+        }
+        if(nread==0){
+            free(buffer);
+            errno = EBADMSG;
             return -1;
         }
     }
@@ -261,4 +273,191 @@ int removeFile(const char* pathname){
     } 
     //l'operazione è terminata correttamente -> il file è stato cancellato
     return 0;
+}
+int closeFile(const char* pathname){
+    if(pathname==NULL){
+        errno = EINVAL;
+        return -1;
+    }
+    if(fd_skt==-1){
+        errno=ENOTCONN;
+        return -1;
+    }
+    t_op operazione=cl;
+    if(writen(fd_skt,&operazione,sizeof(t_op))==-1){//secondo il protocollo di comunicazione invio operazione da effettuare
+        return -1; //errno settata da writen
+    }
+    int len=strlen(pathname)+1;
+    if(writen(fd_skt,&len,sizeof(int))==-1){//secondo il protocollo di comunicazione invio lunghezza path e path del file da leggere
+        return -1;
+    }
+    if(writen(fd_skt,(void*)pathname,len)==-1){
+        return -1;
+    }
+    int res;
+    if(readn(fd_skt,&res,sizeof(int))==-1){ //leggo il risultato dell'operazione
+        return -1;
+    }
+    if(res!=0){
+        errno=res;
+        return -1;
+    } 
+    //l'operazione è terminata correttamente -> il file è stato chiuso
+    return 0;
+}
+int appendToFile(const char* pathname, void* buf, size_t size, const char* dirname){
+    if(pathname==NULL){
+        errno =EINVAL;
+        return -1;
+    }
+    if(fd_skt==-1){
+        errno=ENOTCONN;
+        return -1;
+    }
+    t_op operazione=ap;
+    if(writen(fd_skt,&operazione,sizeof(t_op))==-1){//secondo il protocollo di comunicazione invio operazione da effettuare
+        return -1; //errno settata da writen
+    }
+    //secondo il protocollo di comunicazione invio lunghezza path e path del file da scrivere
+    int len=strlen(pathname)+1;
+    if(writen(fd_skt,&len,sizeof(int))==-1){
+        return -1;
+    }
+    if(writen(fd_skt,(void*)pathname,len)==-1){
+        return -1;
+    } //posso inviare il contenuto da aggiungere al file?
+    int res;
+    if(readn(fd_skt,&res,sizeof(int))==-1){ //leggo il risultato dell'operazione fino a questo punto
+        return -1;
+    }
+    if(res!=0){
+        errno=res;
+        return -1;
+    } //posso inviare buf
+
+    //secondo il protocollo di comunicazione invio dimensione file e contenuto
+    if(writen(fd_skt,&size,sizeof(size_t))==-1){//invio dimensione
+        return -1;
+    }
+    if(writen(fd_skt, buf, size)==-1){//invio contenuto
+        return -1;
+    }
+    if(readn(fd_skt,&res,sizeof(int))==-1){ //leggo il risultato dell'operazione
+        return -1;
+    }
+    if(res!=0){
+        errno=res;
+        return -1;
+    }
+    //operazione terminata correttamente
+    return 0;    
+}
+int readNFiles(int N, const char* dirname){
+    if(isDirectory(dirname)!=1){
+        errno=EIO;
+        return -1;
+    }
+    if(fd_skt==-1){
+        errno=ENOTCONN;
+        return -1;
+    }
+    t_op operazione=rn;
+    if(writen(fd_skt,&operazione,sizeof(t_op))==-1){//secondo il protocollo di comunicazione invio operazione da effettuare
+        return -1; //errno settata da writen
+    }
+    if(writen(fd_skt, &N ,sizeof(int))==-1){//secondo il protocollo di comunicazione invio numero file da leggere
+        return -1; //errno settata da writen
+    }
+
+    int res;
+    if(readn(fd_skt,&res,sizeof(int))==-1){ //leggo il risultato dell'operazione
+        return -1;
+    }
+    if(res==-1){
+        errno=res;
+        return -1;
+    } 
+    //l'operazione è terminata correttamente: il server ha letto un numero di file pari a res
+    
+    
+    int len;  
+    void* path;
+    int nread;
+    FILE* ifp;
+    for(int i=0;i<res;i++){
+        if((nread=readn(fd_skt,&len,sizeof(int)))==-1){ //secondo il protocollo di comunicazione leggo lunghezza path e path
+            return -1; //setta errno
+        }
+        if(nread==0){
+            errno=EBADMSG;
+            return -1;
+        }
+        path=malloc(len);
+        if(path==NULL){
+            return -1;
+        }
+        if((nread=readn(fd_skt,path,len))==-1){
+            return -1; //setta errno
+        }
+        if(nread==0){
+            free(path);
+            errno=EBADMSG;
+            return -1;
+        }
+        //secondo il protocollo di comunicazione leggo dimensione file e contenuto
+        size_t dim;
+        if(readn(fd_skt,&dim,sizeof(size_t))==-1){ //leggo la dimensione del file
+            return -1;
+        }
+        void* buffer=NULL;
+        fprintf(stdout,"%ld\n",dim);
+        if(dim!=0){
+            buffer=malloc(dim); //alloco un buffer di tale dimensione
+            if(buffer==NULL){
+                free(path);
+                perror("malloc");
+                return -1;
+            }
+            if(readn(fd_skt,buffer,dim)==-1){ //leggo contenuto file
+                return -1;
+            }
+            
+        }
+        char* nomeFile=ottieniNomeDaPath(path);
+        int dimNewPath=strlen(nomeFile)+strlen(dirname)+1;
+        char* newPath=malloc(dimNewPath);
+        snprintf(newPath, dimNewPath, "%s%s", dirname, nomeFile);
+        free(path);
+        if((ifp=fopen(newPath,"wb"))==NULL){
+            free(newPath);
+            if(buffer!=NULL)
+                free(buffer);
+            return -1; 
+        }
+        if(buffer!=NULL){
+            if(fwrite(buffer,1,dim,ifp)<dim){
+                free(newPath);
+                if(buffer!=NULL)
+                    free(buffer);
+                errno = EIO;
+                if(fclose(ifp)!=0){
+                    return -1;
+                }
+                return -1;
+            }
+        }
+        free(newPath);
+        if(buffer!=NULL)
+            free(buffer);
+    }
+    return res;
+}
+static char* ottieniNomeDaPath(char* path){
+    if(path == NULL) {
+        return NULL;
+    }
+    char* name;
+    if( (name = strrchr(path, '/')) == NULL )
+        name = path;
+    return name;
 }
