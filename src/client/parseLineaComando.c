@@ -5,7 +5,8 @@
 int isDirectory(char* file);
 void printfUsage();
 int scanDirectory(char* directory, t_coda* richieste,int n);
-
+//modifica un path locale in un path assoluto
+//ritorna un puntatore a path assoluto in caso di successo; NULL altrimenti
 char* ottieniPathAssoluto(char* pathRelativo){
     char* pathCorrente;
     if((pathCorrente=malloc(MAX_PATH_LENGTH))==NULL){
@@ -27,25 +28,38 @@ char* ottieniPathAssoluto(char* pathRelativo){
     strncat(pathCorrente,pathRelativo, len);
     return pathCorrente;
 }
+//parsa tutta la linea di comando per ottenere richietse del client;
+//ritorna 0 in caso di successo, -1 altrimenti
 int ottieniRichieste(config_client* config, t_coda* richieste, int argc, char** argv){
     char* tmpstr;
     char* token;
-    int opt;
+    int opt,prev_ind;
     int n;
+    int flag_f=0,flag_p=0;
     nodo* p;
     if(argc<1){
         printf("Usage: ./client arg");
         return -1;
     }
-    while ((opt = getopt(argc,argv, ":hf:W:w:r:R:d:t:c:p")) != -1) {
+    while(prev_ind = optind, (opt =  getopt(argc, argv, ":f:W:w:r:d:R:t:c:ph")) != EOF){
+        if ( optind == prev_ind + 2 && *optarg == '-' ) { //il comando richiedeva un parametro perchè optarg!=NULL
+            optopt=opt;
+            opt = ':';
+            -- optind;
+        }
         switch(opt) {
             case 'h':
                 printfUsage();
                 return 1;
                 break;
             case 'f':
+                if(flag_f) {
+                    printf("Il flag -f può essere usato una sola volta\n");
+                    return -1;
+                }
                 NULLSYSCALL(config->socket,(void*)malloc(MAX_PATH_LENGTH),"malloc");
                 strncpy(config->socket,optarg,MAX_PATH_LENGTH);
+                flag_f=1;
                 break;
             case 'W':
                 tmpstr=NULL;
@@ -54,7 +68,7 @@ int ottieniRichieste(config_client* config, t_coda* richieste, int argc, char** 
                     NULLSYSCALL(p,malloc(sizeof(nodo)),"malloc");
                     NULLSYSCALL(p->val,(void*)malloc(sizeof(richiesta)),"malloc");
                     ((richiesta*)p->val)->op = WriteFile; 
-                    ((richiesta*)p->val)->path=ottieniPathAssoluto(token);
+                    ((richiesta*)p->val)->path=realpath(token,NULL);
                     if(((richiesta*)p->val)->path==NULL){
                         printf("Errore path nell'operazione -W");
                         return -1;
@@ -98,9 +112,14 @@ int ottieniRichieste(config_client* config, t_coda* richieste, int argc, char** 
                 while(token!=NULL){ //aggiungi tante richieste di lettura quanti sono gli argomenti passati a -r
                     NULLSYSCALL(p,malloc(sizeof(nodo)),"malloc");
                     NULLSYSCALL(p->val,(void*)malloc(sizeof(richiesta)),"malloc");
+                    int len = strlen(token)+1;
+                    ((richiesta*)p->val)->path = malloc(len);
+                    if(((richiesta*)p->val)->path==NULL){
+                        perror("malloc");
+                        return -1;
+                    }
+                    strncpy(((richiesta*)p->val)->path,token,len);
                     ((richiesta*)p->val)->op=ReadFile; 
-                    NULLSYSCALL(((richiesta*)p->val)->path,(void*)malloc(MAX_PATH_LENGTH),"malloc");
-                    strncpy(((richiesta*)p->val)->path,token,MAX_PATH_LENGTH);
                     ((richiesta*)p->val)->n=0;
                     ((richiesta*)p->val)->pathToSave=NULL;
                     p->next=NULL;
@@ -111,7 +130,7 @@ int ottieniRichieste(config_client* config, t_coda* richieste, int argc, char** 
             case 'R': //a R è stato passato un parametro n
                 NULLSYSCALL(p,malloc(sizeof(nodo)),"malloc");
                 NULLSYSCALL(p->val,(void*)malloc(sizeof(richiesta)),"malloc");
-                ((richiesta*)p->val)->op=ReadNFile; //lo leggo
+                ((richiesta*)p->val)->op=ReadNFiles; //operazione richiesta
                 ((richiesta*)p->val)->path=NULL;
                 if(isNumber(optarg,(long*)&(((richiesta*)p->val)->n))!=0){
                    printf("L'opzione -R va usata seguita da un intero che specifica quanti file leggere\n");
@@ -127,8 +146,7 @@ int ottieniRichieste(config_client* config, t_coda* richieste, int argc, char** 
                 ((richiesta*)p->val)->op = WhereToSave; 
                 ((richiesta*)p->val)->path = NULL;
                 ((richiesta*)p->val)->n=0;
-                NULLSYSCALL(((richiesta*)p->val)->pathToSave,(void*)malloc(MAX_PATH_LENGTH),"malloc");
-                strncpy(((richiesta*)p->val)->pathToSave,optarg,MAX_PATH_LENGTH);
+                ((richiesta*)p->val)->pathToSave = realpath(optarg,NULL);
                 p->next=NULL;
                 aggiungiInCoda(richieste,p); //aggiungo richiesta di salvare i file letti in una particolare directory
                 break;
@@ -144,8 +162,13 @@ int ottieniRichieste(config_client* config, t_coda* richieste, int argc, char** 
                     NULLSYSCALL(p,malloc(sizeof(nodo)),"malloc");
                     NULLSYSCALL(p->val,(void*)malloc(sizeof(richiesta)),"malloc");
                     ((richiesta*)p->val)->op=DeleteFile; 
-                    NULLSYSCALL(((richiesta*)p->val)->path,(void*)malloc(MAX_PATH_LENGTH),"malloc");
-                    strncpy(((richiesta*)p->val)->path,token,MAX_PATH_LENGTH);
+                    int len = strlen(token)+1;
+                    ((richiesta*)p->val)->path = malloc(len);
+                    if(((richiesta*)p->val)->path==NULL){
+                        perror("malloc");
+                        return -1;
+                    }
+                    strncpy(((richiesta*)p->val)->path,token,len);
                     ((richiesta*)p->val)->n=0;
                     ((richiesta*)p->val)->pathToSave=NULL;
                     p->next=NULL;
@@ -154,28 +177,32 @@ int ottieniRichieste(config_client* config, t_coda* richieste, int argc, char** 
                 }
                 break;
             case 'p':
+                if(flag_p){
+                    printf("Il flag -p può essere usato una sola volta\n");
+                    return -1;
+                }
                 config->stampaStOut=1;
+                flag_p=1;
                 break;
             case '?': 
                 printf("%c : Opzione non suportata\n", optopt);
                 return -1;
-            
             case ':' :
-                if(optopt=='R'){ // R non ha parametro -> devo leggere tutti i file del server
+                if(optopt=='R'){
                     NULLSYSCALL(p,malloc(sizeof(nodo)),"malloc");
                     NULLSYSCALL(p->val,(void*)malloc(sizeof(richiesta)),"malloc");
-                    ((richiesta*)p->val)->op=ReadNFile; //lo leggo
+                    ((richiesta*)p->val)->op=ReadNFiles; //operazione richiesta
                     ((richiesta*)p->val)->path=NULL;
                     ((richiesta*)p->val)->n=-1;
                     ((richiesta*)p->val)->pathToSave=NULL;
                     p->next=NULL;
                     aggiungiInCoda(richieste,p);
+                    break;
                 }
                 else{
                     printf("Opzione %c richiede parametri\n", optopt);
                     return -1;
                 }
-                break;
         }
     }
     return 0;
@@ -186,13 +213,13 @@ int validazioneRichieste(t_coda* richieste){
     nodo* tmp=richieste->head;
     while(tmp!=NULL){
         if(((richiesta*)tmp->val)->op==WhereToSave){ //la richiesta di prima deve essere stata una -r o una -R
-            if(tmp->previous!=NULL && (((richiesta*)tmp->previous->val)->op==ReadFile || ((richiesta*)tmp->previous->val)->op==ReadNFile)){
+            if(tmp->previous!=NULL && (((richiesta*)tmp->previous->val)->op==ReadFile || ((richiesta*)tmp->previous->val)->op==ReadNFiles)){
                 nodo* tmp1=tmp->previous;
                 do{// setto il parametro dove salvare il file letto in tutte le richieste di lettura date da una -r
                     NULLSYSCALL(((richiesta*)tmp1->val)->pathToSave,(void*)malloc(MAX_PATH_LENGTH),"malloc");
                     strncpy(((richiesta*)tmp1->val)->pathToSave, ((richiesta*)tmp->val)->pathToSave, MAX_PATH_LENGTH);
                     tmp1=tmp1->previous;
-                }while(tmp1!=NULL && (((richiesta*)tmp1->val)->op==ReadFile || ((richiesta*)tmp1->val)->op==ReadNFile));
+                }while(tmp1!=NULL && (((richiesta*)tmp1->val)->op==ReadFile || ((richiesta*)tmp1->val)->op==ReadNFiles));
                 tmp->previous->next=tmp->next; //rimuovo il nodo -d perchè non è una richiesta da fare al server
                 if(tmp->next!=NULL)
                     tmp->next->previous=tmp->previous;
@@ -215,6 +242,7 @@ int validazioneRichieste(t_coda* richieste){
 void printfUsage(){
     printf("Uso\n");
 }
+//ritorna 1 se file è il path di una directory; -1 in caso di errore; 0 altrimenti
 int isDirectory(char* file){
 	struct stat info;
 	if(stat(file,&info)==-1){
@@ -226,6 +254,8 @@ int isDirectory(char* file){
 	}
 	return 0;
 }
+//visita ricorsivamente a directory e aggiunge n richieste di scrittura alla coda;
+//ritorna 0 in caso di successo; -1 altrimenti
 int scanDirectory(char* directory, t_coda* richieste, int n){
     static int i=0;
     char buf[MAX_PATH_LENGTH];
@@ -255,7 +285,7 @@ int scanDirectory(char* directory, t_coda* richieste, int n){
                 NULLSYSCALL(p,malloc(sizeof(nodo)),"malloc");
                 NULLSYSCALL(p->val,(void*)malloc(sizeof(richiesta)),"malloc");
                 ((richiesta*)p->val)->op = WriteFile; 
-                ((richiesta*)p->val)->path=ottieniPathAssoluto(file->d_name);
+                ((richiesta*)p->val)->path=realpath(file->d_name,NULL);
                 if(((richiesta*)p->val)->path==NULL){
                     printf("Errore path nell'operazione -W\n");
                     return -1;
