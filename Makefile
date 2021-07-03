@@ -9,7 +9,7 @@ LIBS            = -pthread
 
 
 TARGETS		= bin/client \
-			      bin/server \
+			  bin/server \
 			  
 
 
@@ -25,14 +25,14 @@ objs/%.o: src/%.c
 
 all		: $(TARGETS)
 
-bin/client: objs/client/client.o objs/struttureDati/coda.o objs/client/parseLineaComando.o objs/api/api.o
+bin/client: objs/client/client.o objs/struttureDati/coda.o objs/client/parseLineaComando.o objs/client/eseguiRichieste.o objs/api/api.o
 	$(CC) $(CCFLAGS) $(INCLUDES) $(OPTFLAGS) $(LDFLAGS) -o $@ $^ $(LIBS)
- 
-bin/server: objs/server/server.o objs/struttureDati/icl_hash.o objs/server/threadpool.o objs/server/threadW.o objs/struttureDati/coda.o
+
+bin/server: objs/server/server.o objs/struttureDati/icl_hash.o objs/server/threadpool.o objs/server/threadW.o objs/struttureDati/coda.o objs/server/politicaSostituzione.o
 	$(CC) $(CCFLAGS) $(INCLUDES) $(OPTFLAGS) $(LDFLAGS) -o $@ $^ $(LIBS)
 
 clean		: 
 	rm -f $(TARGETS)
 
 cleanall	: clean
-	rm -f *.o *~ *.a
+	rm -f objs/*.o *~ *.a
