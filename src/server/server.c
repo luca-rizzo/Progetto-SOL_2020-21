@@ -5,15 +5,16 @@
 #include <threadpool.h>
 #include<threadW.h>
 #include<conn.h>
-#define UNIX_PATH_MAX 108
+
 //Struttura File Server condivisa
 t_file_storage* file_storage;
 config_server config;
 numClientConnessi* numClient;
 
-int inizializzaFileStorage(char* pathConfig);
+int inizializzaFileStorage(int argc, char** argv);
 void liberaFile (void* val);
 int updatemax(fd_set set, int fdmax);
+int ottieniConfigServer(char* pathConfig);
 
 static void *sigHandler(void *arg) {
     sigset_t *set = ((sigHandler_t*)arg)->set;
@@ -84,7 +85,7 @@ int main(int argc,char** argv){
 		return -1;
     }
     
-    if(inizializzaFileStorage(argv[1])==-1){
+    if(inizializzaFileStorage(argc,argv)==-1){
         return -1; //errore fatale
     }
     int readyDescr[2]; //pipe usata dai threads worker per notificare quale fd deve essere riascoltato
@@ -92,6 +93,7 @@ int main(int argc,char** argv){
         perror("pipe");
         exit(EXIT_FAILURE);
     }
+    //creo il pool di thread
     threadpool_t* threadpool=createThreadPool(config.numThreadsWorker, 3*config.numThreadsWorker);
     if (threadpool==NULL){
         perror("malloc");
@@ -114,7 +116,7 @@ int main(int argc,char** argv){
     int fd_num=0;
     struct sockaddr_un sa;
     unlink(SOCKNAME);
-    strncpy(sa.sun_path, config.sockname , UNIX_PATH_MAX-1);
+    strncpy(sa.sun_path, config.sockname , UNIX_PATH_MAX);
     sa.sun_family = AF_UNIX;
     if((fd_skt=socket(AF_UNIX, SOCK_STREAM,0))==-1){
         perror("socket");
@@ -187,6 +189,7 @@ int main(int argc,char** argv){
                         config.stato=termina;
                     else{
                         config.stato=rifiutaConnessioni;
+                        close(fd_skt);
                         FD_CLR(fd_skt,&set); // non accettare nuove connessioni
                     }
                     close(pfd[0]);
@@ -213,7 +216,7 @@ int main(int argc,char** argv){
                     int r=addToThreadPool(threadpool,funcW,(void*)args);
                     FD_CLR(fd,&set);
                     if (fd == fd_num) 
-                        fdmax = updatemax(set, fdmax);
+                        fd_num = updatemax(set, fd_num);
                     if(r==0){
                         continue; //richiesta aggiunta correttemente
                     }
@@ -252,12 +255,17 @@ int main(int argc,char** argv){
     return 0;
 }
 
-int inizializzaFileStorage(char* pathConfig){
-    //VALORI DI DEFAULT
-    config.maxNumeroFile=50;
-    config.maxDimbyte=1048576;//10 MB
-    config.numThreadsWorker=10;
-    config.sockname=SOCKNAME;
+int inizializzaFileStorage(int argc, char** argv){
+    
+    if(argc<2 || ottieniConfigServer(argv[1])==-1){
+        //VALORI DI DEFAULT
+        fprintf(stdout,"Avvio il server con valori di default\n");
+        config.maxNumeroFile=10;
+        config.maxDimbyte=800;//10 MB==1048576
+        config.numThreadsWorker=10;
+        strncpy(config.sockname,SOCKNAME,UNIX_PATH_MAX-1);
+    }
+    printf("%d %d %ld %s\n",config.maxNumeroFile,config.numThreadsWorker,config.maxDimbyte,config.sockname);
     config.stato=attivo;
     file_storage=(t_file_storage*)malloc(sizeof(t_file_storage));
     if(file_storage==NULL){
@@ -285,7 +293,10 @@ void liberaFile (void* val){
     t_file* file = (t_file*) val;
     if(file->contenuto!=NULL)
         free(file->contenuto);
-    if(distruggiCoda(file->fd,NULL)==-1){
+    if(file->path!=NULL){
+        free(file->path);
+    }
+    if(distruggiCoda(file->fd,free)==-1){
         printf("Errore distruzione coda\n");
     }
     pthread_mutex_destroy(&(file->mtx));
@@ -305,6 +316,98 @@ int updatemax(fd_set set, int fdmax) {
     for(int i=(fdmax-1);i>=0;--i)
 	    if (FD_ISSET(i, &set)) 
             return i;
-    assert(1==0);
     return -1;
+}
+//ritorna 0 se ho ottenuto le richieste tutte correttamente; -1 altrimenti
+int ottieniConfigServer(char* pathConfig){
+    if(pathConfig ==NULL)
+        return -1;
+    FILE* ifp;
+    long n;
+    char* token,*state;
+    int n_workers=0,socket_name=0,n_max_file=0,max_storage=0; //variabili usate per verificare che tutte le configurazioni siano passate correttamente
+    char buffer[108];
+    if((ifp=fopen(pathConfig,"r"))==NULL){
+        return -1;
+    }
+    while(fgets(buffer,108,ifp)!=NULL){
+        token=strtok_r(buffer,":", &state);
+        if(token==NULL)
+            return -1;
+        if(strncmp(token,"n_max_file",10)==0){
+            if(n_max_file==1){
+                fprintf(stdout,"n_max_file va specificato una sola volta\n");
+                return -1;
+            }
+            n_max_file=1;
+            token=strtok_r(NULL,"\n\0", &state);
+            if(token==NULL){
+                return -1;
+            }
+            if(isNumber(token,&n)!=0){
+                fprintf(stdout,"n_max_file deve essere seguito da un intero che specifica il numero massimo di file nel server\n");
+                return -1;
+            }
+            config.maxNumeroFile=n;
+        }
+        else if(strncmp(token,"max_storage",11)==0){
+            if(max_storage==1){
+                fprintf(stdout,"max_storage va specificato una sola volta\n");
+                return -1;
+            }
+            max_storage=1;
+            token=strtok_r(NULL,"\n\0", &state);
+            if(token==NULL){
+                return -1;
+            }
+            if(isNumber(token,&(config.maxDimbyte))!=0){
+                fprintf(stdout,"max_storage deve essere seguito da un intero che specifica la capacità massima del server\n");
+                return -1;
+            }
+        }
+        else if(strncmp(token,"n_workers",9)==0){
+            if(n_workers==1){
+                fprintf(stdout,"n_workers va specificato una sola volta\n");
+                return -1;
+            }
+            n_workers=1;
+            token=strtok_r(NULL,"\n\0", &state);
+            if(token==NULL){
+                return -1;
+            }
+            if(isNumber(token,&n)!=0){
+                fprintf(stdout,"n_workers deve essere seguito da un intero che specifica il numero di workers del server\n");
+                return -1;
+            }
+            config.numThreadsWorker=n;
+        }
+        else if(strncmp(token,"sockname",11)==0){
+            if(socket_name==1){
+                fprintf(stdout,"sockname va specificato una sola volta\n");
+                return -1;
+            }
+            socket_name=1;
+            token=strtok_r(NULL,"\n\0", &state);
+            if(token==NULL){
+                return -1;
+            }
+            while(*token==' '){
+                token++;
+            }
+            if(*token=='\0'){
+                fprintf(stdout,"sockname deve essere seguito da una stringa che indica path del socket\n");
+                return -1;
+            }
+            strncpy(config.sockname,token,UNIX_PATH_MAX-1);
+        }
+    }
+    if(!n_workers || !socket_name || !n_max_file || !max_storage){
+        fprintf(stdout,"errore nel file di configurazione: mancano parametri\n");
+        return -1;
+    }
+    if(fclose(ifp)!=0){
+        perror("fclose");
+        return -1;
+    }
+    return 0;
 }
