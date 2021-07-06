@@ -1,20 +1,21 @@
-#include<util.h>
-#include <coda.h>
-#include <icl_hash.h>
 #include <server.h>
-#include <threadpool.h>
-#include<threadW.h>
-#include<conn.h>
 
 //Struttura File Server condivisa
 t_file_storage* file_storage;
+//configurazione server
 config_server config;
-numClientConnessi* numClient;
+//struttura dati che tiene traccia del numero di client connessi e gli effettivi client connessi
+clientConnessi* clientAttivi;
 
 int inizializzaFileStorage(int argc, char** argv);
+int inizializzaClientAttivi();
+int ottieniNumClientConnessi();
 void liberaFile (void* val);
 int updatemax(fd_set set, int fdmax);
 int ottieniConfigServer(char* pathConfig);
+void stampaInformazioni();
+int aggiungiConnessione(int fd_client);
+int chiudiTutteConnessioni();
 
 static void *sigHandler(void *arg) {
     sigset_t *set = ((sigHandler_t*)arg)->set;
@@ -32,7 +33,7 @@ static void *sigHandler(void *arg) {
 	        case SIGQUIT:
 	            printf("ricevuto segnale %s, esco il prima possibile\n", (sig==SIGINT) ? "SIGINT":"SIGQUIT");
                 if(writen(fd_pipe,&sig,sizeof(int))==-1){ //notifico il listener thread della ricezione del segnale indicando quale segnale ho ricevuto
-                    perror("writen");
+                    perror("writen sigHandler");
                     return NULL;
                 }
 	            close(fd_pipe);  
@@ -40,11 +41,10 @@ static void *sigHandler(void *arg) {
             case SIGHUP:
                 printf("ricevuto segnale %s, esco non appena ho servito tutti i client\n", "SIGHUP");
                 if(writen(fd_pipe,&sig,sizeof(int))==-1){ //notifico il listener thread della ricezione del segnale indicando quale segnale ho ricevuto
-                    perror("writen");
+                    perror("writen sigHandler");
                     return NULL;
                 }
 	            close(fd_pipe);  
-                config.stato=rifiutaConnessioni;
 	            return NULL;
 	        default:  ; 
 	    }
@@ -53,13 +53,7 @@ static void *sigHandler(void *arg) {
 }
 
 int main(int argc,char** argv){
-    int r;
-    int pfd[2];
-    pthread_t sighandler_thread;
-    if(pipe(pfd)==-1){
-        perror("pipe");
-        return -1;
-    }
+    int r;    
     //blocco i segnali per evitare che vengano segnalati a thread diversi dal sighandler thread
     sigset_t mask;
     sigemptyset(&mask);
@@ -70,28 +64,40 @@ int main(int argc,char** argv){
         perror("pthread_sigmask");
         return -1;
     }
-    //ignoro SIGPIPE per evitare che una scrittura su un socket chiuso (dall'altra parte) termini il server
+    //ignoro SIGPIPE per evitare che una scrittura su un socket chiuso (lato client) termini il server
     struct sigaction s;
     memset(&s,0,sizeof(s));    
     s.sa_handler=SIG_IGN;
     if ((sigaction(SIGPIPE,&s,NULL) ) == -1 ) {   
 	    perror("sigaction");
 	    return -1;
-    } 
+    }
+    int pfd[2];//pipe usata per far comunicare thread dispatcher e signal handler thread
+    if(pipe(pfd)==-1){ 
+        perror("pipe");
+        return -1;
+    }
     //installo il signal handler thread
+    pthread_t sighandler_thread;
     sigHandler_t handlerArgs = { &mask, pfd[1]};
     if (pthread_create(&sighandler_thread, NULL, sigHandler, &handlerArgs) != 0) {
 		fprintf(stderr, "errore nella creazione del signal handler thread\n");
 		return -1;
     }
     
+    //inizializzo file storage con valori di default o con valori passati tramite file .txt
     if(inizializzaFileStorage(argc,argv)==-1){
+        fprintf(stderr,"Errore nell'inizializzazione server\n");
         return -1; //errore fatale
     }
-    int readyDescr[2]; //pipe usata dai threads worker per notificare quale fd deve essere riascoltato
+    int readyDescr[2]; //pipe usata dai threads worker per notificare quale fd deve essere riascoltato dal listen socket
     if(pipe(readyDescr)==-1){
         perror("pipe");
         exit(EXIT_FAILURE);
+    }
+    if(inizializzaClientAttivi()==-1){
+        fprintf(stderr,"Errore nell'inizializzazione server\n");
+        return -1; //errore fatale
     }
     //creo il pool di thread
     threadpool_t* threadpool=createThreadPool(config.numThreadsWorker, 3*config.numThreadsWorker);
@@ -100,22 +106,11 @@ int main(int argc,char** argv){
         printf("Errore nell'inizializzare il threads pool\n"); //errore fatale
         return -1;
     }
-    //inizializzo variabile numClient
-    numClient= malloc(sizeof(numClientConnessi));
-    if(numClient==NULL){
-        printf("Errore fatale");
-        return -1;
-    }
-    numClient->c=0;
-    if ((pthread_mutex_init(&(numClient->mtx), NULL) != 0)){
-        perror("pthread_mutex_init");
-        return -1;
-    }
 
-    long fd_skt,fd_client;
+    int fd_skt,fd_client;
     int fd_num=0;
     struct sockaddr_un sa;
-    unlink(SOCKNAME);
+    (void)unlink(config.sockname);
     strncpy(sa.sun_path, config.sockname , UNIX_PATH_MAX);
     sa.sun_family = AF_UNIX;
     if((fd_skt=socket(AF_UNIX, SOCK_STREAM,0))==-1){
@@ -135,45 +130,46 @@ int main(int argc,char** argv){
     FD_SET(fd_skt,&set);
     FD_SET(pfd[0],&set);
     FD_SET(readyDescr[0],&set);
-    if(fd_skt>pfd[0]){
-        fd_num=fd_skt;
-    }
-    else{
-        fd_num=pfd[0];
-    }
-    if(readyDescr[0]>fd_num){
-        fd_num= readyDescr[0];
-    }
+    //setto fd_num
+    fd_num = MAX(fd_skt,pfd[0]);
+    fd_num = MAX(fd_num,readyDescr[0]);
     while(config.stato!=termina){
         readset=set;
-        struct timeval timeout={0, 10000}; // 100 milliseconds
+        struct timeval timeout={0, 20000}; // 200 milliseconds: usato per controllare se ci sono client ancora connessi dopo il segnale SIGHUP
         if((r=select(fd_num+1,&readset,NULL,NULL,&timeout))<0){ 
             perror("select");
             return -1; //errore fatale
         }
         if(r==0){
             if(config.stato==rifiutaConnessioni){
-                int clientAttivi;
-                if((clientAttivi=modificaNumClientConnessi(0))==-1){
+                int clientAttivi=ottieniNumClientConnessi();
+                if(clientAttivi==-1){ 
                     perror("lock");
-                    return -1;
+                    return -1; //errore fatale
                 }
                 if(clientAttivi==0)
                     break;
             }
             continue;
         }
-        for(long fd=0;fd<=fd_num;fd++){
+        for(int fd=0;fd<=fd_num;fd++){
             if(FD_ISSET(fd,&readset)){
                 if(fd==fd_skt){
                     if((fd_client=accept(fd_skt,NULL,NULL))==-1){
                         perror("accept");
                         return -1;
                     }
-                    printf("Connessione accettata\n");
-                    if(modificaNumClientConnessi(1)==-1){
-                        perror("modificaNumClientConnessi");
+                    fprintf(stdout,"Connessione accettata\n");
+                    if(aggiungiConnessione(fd_client)==-1){
+                        fprintf(stderr,"Errore nell'aggiungere la connessione con client %d\n",fd_client);
+                        perror("aggiungiConnessione");
                         return -1; //errore fatale
+                    }
+                    fprintf(stderr,"\nSTAMPA INFORMAZIONI\n");
+                    nodo* p = clientAttivi->client->head;
+                    fprintf(stderr,"oooooooooo");
+                    for(;p!=NULL;p=p->next){
+                        fprintf(stderr,"%d\t",*(int*)p->val);
                     }
                     FD_SET(fd_client,&set);
                     if(fd_client>fd_num)
@@ -191,12 +187,14 @@ int main(int argc,char** argv){
                         config.stato=rifiutaConnessioni;
                         close(fd_skt);
                         FD_CLR(fd_skt,&set); // non accettare nuove connessioni
+                        fd_skt=-1;
                     }
-                    close(pfd[0]);
+                    close(pfd[0]); //chiudo il lato della pipe che ascoltava signal handler
                     FD_CLR(pfd[0],&set);
-                    break;
+                    if (fd == fd_num) 
+                        fd_num = updatemax(set, fd_num);
                 }
-                else if(fd==readyDescr[0]){
+                else if(fd==readyDescr[0]){ //un worker mi sta avvisando che devo riascoltare un client
                     if(readn(fd,&fd_client,sizeof(int))==-1){
                         printf("Errore nella lettura della pipe\n");
                         continue;
@@ -206,6 +204,8 @@ int main(int argc,char** argv){
                         fd_num=fd_client;
                 }
                 else{ // nuova richiesta da un client
+                    fprintf(stderr,"\nSTAMPA INFORMAZIONIiiiiii\n");
+
                     threadW_args* args = malloc(sizeof(threadW_args));
                     if(args == NULL){
                         perror("Malloc"); //errore fatale
@@ -214,7 +214,7 @@ int main(int argc,char** argv){
                     args->fd_daServire = fd;
                     args->pipe = readyDescr[1];
                     int r=addToThreadPool(threadpool,funcW,(void*)args);
-                    FD_CLR(fd,&set);
+                    FD_CLR(fd,&set); // per adesso non riscoltare fd: sarà il worker a notificarti quando farlo
                     if (fd == fd_num) 
                         fd_num = updatemax(set, fd_num);
                     if(r==0){
@@ -230,38 +230,50 @@ int main(int argc,char** argv){
                     }  
                 }
             }
+            if(config.stato==termina)
+                break;
         }
     }
-    printf("Notifico threads che ho finito\n");
-    if(destroyThreadPool(threadpool,0)==-1){
-        printf("Errore nella cancellazione del threads pool\n");
-    }
     int err;
-    if((err=(pthread_join(sighandler_thread,NULL)))!=0){
+    if((err=(pthread_join(sighandler_thread,NULL)))!=0){ //faccio il join del signal handler thread
         errno=err;
         perror("pthread_join");
         return -1; //errore fatale
     }
+    printf("Notifico threads workers che ho finito\n");
+    if(destroyThreadPool(threadpool,1)==-1){ //distruggo il pool di threads
+        fprintf(stderr,"Errore nella cancellazione del threads pool\n");
+    }
+    stampaInformazioni();
+    //chiudo tutte le connessioni attive e libero memoria allocata da clientAttivi
+    if(chiudiTutteConnessioni()==-1){
+        fprintf(stderr,"Errore nella chiusura delle connessioni con i client\n");
+        perror("chiudiTutteConnessioni");
+        return -1;
+    }
+    //libero il file storage
     icl_hash_destroy(file_storage->storage,free,liberaFile);
-    //distruggo numClient
-    pthread_mutex_destroy(&(numClient->mtx));
-    free(numClient);
+    pthread_mutex_destroy(&(file_storage->mtx));
     free(file_storage);
+
     (void)unlink(config.sockname);
+    //chiudo pipe usata per far comunicare workers e thread dispatcher
     close(readyDescr[0]);
     close(readyDescr[1]);
-    close(fd_skt);
+    //
+    if(fd_skt!=-1){
+        close(fd_skt);
+    }
     unlink(SOCKNAME);
     return 0;
 }
 
 int inizializzaFileStorage(int argc, char** argv){
-    
     if(argc<2 || ottieniConfigServer(argv[1])==-1){
         //VALORI DI DEFAULT
         fprintf(stdout,"Avvio il server con valori di default\n");
         config.maxNumeroFile=10;
-        config.maxDimbyte=800;//10 MB==1048576
+        config.maxDimbyte=1048576;//10 MB==1048576
         config.numThreadsWorker=10;
         strncpy(config.sockname,SOCKNAME,UNIX_PATH_MAX-1);
     }
@@ -274,6 +286,9 @@ int inizializzaFileStorage(int argc, char** argv){
     }
     file_storage->numeroFile=0;
     file_storage->dimBytes=0;
+    file_storage->maxFile=0;
+    file_storage->maxDimBytes=0;
+    file_storage->nReplacement=0;
     file_storage->storage = icl_hash_create((2*config.maxNumeroFile),NULL,NULL);
     if(file_storage->storage==NULL){
         free(file_storage);
@@ -304,13 +319,8 @@ void liberaFile (void* val){
     pthread_cond_destroy(&(file->cond_Go));
     free(file);
 }
-int modificaNumClientConnessi(int incr){
-    int r;
-    LOCK_RETURN(&(numClient->mtx),-1);
-    r=(numClient->c+=incr);
-    UNLOCK_RETURN(&(numClient->mtx),-1);
-    return r;
-}
+
+
 // ritorno l'indice massimo tra i descrittori attivi
 int updatemax(fd_set set, int fdmax) {
     for(int i=(fdmax-1);i>=0;--i)
@@ -318,6 +328,8 @@ int updatemax(fd_set set, int fdmax) {
             return i;
     return -1;
 }
+
+
 //ritorna 0 se ho ottenuto le richieste tutte correttamente; -1 altrimenti
 int ottieniConfigServer(char* pathConfig){
     if(pathConfig ==NULL)
@@ -409,5 +421,100 @@ int ottieniConfigServer(char* pathConfig){
         perror("fclose");
         return -1;
     }
+    return 0;
+}
+
+int inizializzaClientAttivi(){
+    clientAttivi= malloc(sizeof(clientConnessi));
+    if(clientAttivi==NULL){
+        printf("Errore fatale");
+        return -1;
+    }
+    clientAttivi->nclient=0;
+    if ((pthread_mutex_init(&(clientAttivi->mtx), NULL) != 0)){
+        perror("pthread_mutex_init");
+        return -1;
+    }
+    clientAttivi->client=inizializzaCoda(NULL);
+    if(clientAttivi->client==NULL){
+        pthread_mutex_destroy(&(clientAttivi->mtx));
+        free(clientAttivi);
+        return -1;
+    }
+    return 0;
+}
+
+//aggiunge fd all'insieme dei client connessi
+//ritorna 0 in caso di successo, -1 altrimenti
+int aggiungiConnessione(int fd_client){
+    LOCK_RETURN(&(clientAttivi->mtx),-1);
+    if(isInCoda(clientAttivi->client,&fd_client)){
+        UNLOCK_RETURN(&(clientAttivi->mtx),-1);
+        errno=EISCONN;
+        return -1;
+    }
+    int* fd=malloc(sizeof(int));
+    if(fd==NULL){
+        UNLOCK_RETURN(&(clientAttivi->mtx),-1);
+        return -1;
+    }
+    *fd=fd_client;
+    if(aggiungiInCoda(clientAttivi->client,(void*) fd)==-1){
+        UNLOCK_RETURN(&(clientAttivi->mtx),-1);
+        errno=EPROTO;//errore di protocollo interno
+        return -1;
+    }
+    clientAttivi->nclient++;
+    UNLOCK_RETURN(&(clientAttivi->mtx),-1);
+    return 0;
+}
+
+int ottieniNumClientConnessi(){
+    int r;
+    LOCK_RETURN(&(clientAttivi->mtx),-1);
+    r=clientAttivi->nclient;
+    UNLOCK_RETURN(&(clientAttivi->mtx),-1);
+    return r;
+}
+
+void stampaInformazioni(){
+    fprintf(stdout,"\nSTAMPA INFORMAZIONI\n");
+    fprintf(stdout,"Numero massimo di file memorizzato nel file storage: %d\n", file_storage->maxFile);
+    fprintf(stdout,"Dimensione massima del file storage: %ld\n", file_storage->maxDimBytes);
+    fprintf(stdout,"Numero di volte in cui è stato eseguito algoritmo di rimpiazzamento: %d\n", file_storage->nReplacement);
+    fprintf(stdout,"Lista file presenti nel file storage al momento della chiusura:\n");
+    icl_entry_t *bucket, *curr;
+    t_file* file;
+    int i;
+    icl_hash_t *ht = file_storage->storage;
+    for (i=0; i<ht->nbuckets; i++) {
+        bucket = ht->buckets[i];
+        for (curr=bucket; curr!=NULL; ) {
+            file=(t_file*) curr->data;
+            //non ho bisogno di acquisire lock sul file perchè ormai vi è solo il main thread
+            fprintf(stdout,"%s\t%ld\n",file->path,file->dimByte);
+            curr=curr->next;
+        }
+    }
+}
+int chiudiTutteConnessioni(){
+    nodo* conn;
+    int fd_toClose;
+    conn=prelevaDaCoda(clientAttivi->client); //non ho bisogno di acquisire la lock perchè ormai non c'è più concorrenza
+    while(conn!=NULL){
+        fd_toClose=*((int*)conn->val);
+        if(close(fd_toClose)==-1){
+            return -1;
+        }
+        free(conn->val);
+        free(conn);
+        conn=prelevaDaCoda(clientAttivi->client);
+    }
+    if(distruggiCoda(clientAttivi->client,free)==-1){
+        errno=EPROTO;
+        return -1;
+    }
+    pthread_mutex_destroy(&(clientAttivi->mtx));
+    free(clientAttivi);
     return 0;
 }
