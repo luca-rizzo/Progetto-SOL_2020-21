@@ -14,7 +14,7 @@ typedef struct{
 }t_coda;
 
 t_coda* inizializzaCoda(int (*cmp) (void*,void*));
-int aggiungiInCoda(t_coda* coda, nodo* p);
+int aggiungiInCoda(t_coda* coda, void* val);
 nodo* prelevaDaCoda(t_coda* coda);
 int distruggiCoda(t_coda* coda, void (*liberaValoreNodo)(void*));
 int isInCoda(t_coda* coda, void* val);
