@@ -1,42 +1,18 @@
-#include<util.h>
-#include<coda.h>
 #include<client.h>
-//ritorna -1 in caso di errore; 1 se ho digitato flag -h; 0 se lo scan delle richieste è andato a buon fine
+
 int isDirectory(char* file);
 void printfUsage();
 int scanDirectory(char* directory, t_coda* richieste,int n);
-//modifica un path locale in un path assoluto
-//ritorna un puntatore a path assoluto in caso di successo; NULL altrimenti
-char* ottieniPathAssoluto(char* pathRelativo){
-    char* pathCorrente;
-    if((pathCorrente=malloc(MAX_PATH_LENGTH))==NULL){
-        perror("malloc");
-        return NULL;
-    }
-    if(getcwd(pathCorrente,MAX_PATH_LENGTH)==NULL){
-        perror("getcwd");
-        return NULL;
-    }
-    int len=MAX_PATH_LENGTH-strlen(pathCorrente);
-    if(len<2)
-        return NULL; //ci entra nella nostra stringa?
-    strncat(pathCorrente,"/", len);
-    len=MAX_PATH_LENGTH-strlen(pathCorrente);
-    if(len<strlen(pathRelativo)+1){//ci entra nella nostra stringa?
-        return NULL;
-    }
-    strncat(pathCorrente,pathRelativo, len);
-    return pathCorrente;
-}
-//parsa tutta la linea di comando per ottenere richietse del client;
-//ritorna 0 in caso di successo, -1 altrimenti
+
+//parsa tutta la linea di comando per ottenere richieste del client;
+//ritorna -1 in caso di errore; 1 se ho digitato flag -h; 0 se lo scan delle richieste è andato a buon fine
 int ottieniRichieste(config_client* config, t_coda* richieste, int argc, char** argv){
     char* tmpstr;
     char* token;
     int opt,prev_ind;
     int n;
     int flag_f=0,flag_p=0;
-    nodo* p;
+    richiesta* req;
     if(argc<1){
         printf("Usage: ./client arg");
         return -1;
@@ -65,18 +41,17 @@ int ottieniRichieste(config_client* config, t_coda* richieste, int argc, char** 
                 tmpstr=NULL;
                 token=strtok_r(optarg,",",&tmpstr);
                 while(token!=NULL){ //aggiungi tante richieste di scrittura quanti sono gli argomenti passati a -W
-                    NULLSYSCALL(p,malloc(sizeof(nodo)),"malloc");
-                    NULLSYSCALL(p->val,(void*)malloc(sizeof(richiesta)),"malloc");
-                    ((richiesta*)p->val)->op = WriteFile; 
-                    ((richiesta*)p->val)->path=realpath(token,NULL);
-                    if(((richiesta*)p->val)->path==NULL){
-                        printf("Errore path nell'operazione -W");
+                    NULLSYSCALL(req,(richiesta*)malloc(sizeof(richiesta)),"malloc");
+                    req->op = WriteFile; 
+                    if((req->path=realpath(token,NULL))==NULL){
+                        perror("Errore nel convertire path locale in globale");
                         return -1;
                     }
-                    ((richiesta*)p->val)->n=0;
-                    ((richiesta*)p->val)->pathToSave=NULL;
-                    p->next=NULL;
-                    aggiungiInCoda(richieste,p);
+                    req->n=0;
+                    req->pathToSave=NULL;
+                    if(aggiungiInCoda(richieste,(void*) req)==-1){
+                        fprintf(stderr,"Errore aggiunta richiesta di scrittura file %s\n",req->path);
+                    }
                     token = strtok_r(NULL, ",", &tmpstr);
                 }
                 break;
@@ -110,45 +85,45 @@ int ottieniRichieste(config_client* config, t_coda* richieste, int argc, char** 
                 tmpstr=NULL;
                 token=strtok_r(optarg,",",&tmpstr);
                 while(token!=NULL){ //aggiungi tante richieste di lettura quanti sono gli argomenti passati a -r
-                    NULLSYSCALL(p,malloc(sizeof(nodo)),"malloc");
-                    NULLSYSCALL(p->val,(void*)malloc(sizeof(richiesta)),"malloc");
-                    int len = strlen(token)+1;
-                    ((richiesta*)p->val)->path = malloc(len);
-                    if(((richiesta*)p->val)->path==NULL){
-                        perror("malloc");
+                    NULLSYSCALL(req,(richiesta*)malloc(sizeof(richiesta)),"malloc");
+                    req->op = ReadFile; 
+                    if((req->path=realpath(token,NULL))==NULL){
+                        perror("Errore nel convertire path locale in globale");
                         return -1;
                     }
-                    strncpy(((richiesta*)p->val)->path,token,len);
-                    ((richiesta*)p->val)->op=ReadFile; 
-                    ((richiesta*)p->val)->n=0;
-                    ((richiesta*)p->val)->pathToSave=NULL;
-                    p->next=NULL;
-                    aggiungiInCoda(richieste,p);
+                    req->n=0;
+                    req->pathToSave=NULL;
+                    if(aggiungiInCoda(richieste,(void*) req)==-1){
+                        fprintf(stderr,"Errore aggiunta richiesta di lettura file %s\n",req->path);
+                    }
                     token = strtok_r(NULL, ",", &tmpstr);
                 }
                 break;
             case 'R': //a R è stato passato un parametro n
-                NULLSYSCALL(p,malloc(sizeof(nodo)),"malloc");
-                NULLSYSCALL(p->val,(void*)malloc(sizeof(richiesta)),"malloc");
-                ((richiesta*)p->val)->op=ReadNFiles; //operazione richiesta
-                ((richiesta*)p->val)->path=NULL;
-                if(isNumber(optarg,(long*)&(((richiesta*)p->val)->n))!=0){
+                NULLSYSCALL(req,(richiesta*)malloc(sizeof(richiesta)),"malloc");
+                req->op = ReadNFiles; 
+                req->pathToSave=NULL;
+                req->path=NULL;
+                if(isNumber(optarg,(long*)&(req->n))!=0){
                    printf("L'opzione -R va usata seguita da un intero che specifica quanti file leggere\n");
                    return -1;
                 }
-                ((richiesta*)p->val)->pathToSave=NULL;
-                p->next=NULL;
-                aggiungiInCoda(richieste,p);
+                if(aggiungiInCoda(richieste,(void*) req)==-1){
+                    fprintf(stderr,"Errore aggiunta richiesta di lettura N file \n");
+                }
                 break;
             case 'd':
-                NULLSYSCALL(p,malloc(sizeof(nodo)),"malloc");
-                NULLSYSCALL(p->val,(void*)malloc(sizeof(richiesta)),"malloc");
-                ((richiesta*)p->val)->op = WhereToSave; 
-                ((richiesta*)p->val)->path = NULL;
-                ((richiesta*)p->val)->n=0;
-                ((richiesta*)p->val)->pathToSave = realpath(optarg,NULL);
-                p->next=NULL;
-                aggiungiInCoda(richieste,p); //aggiungo richiesta di salvare i file letti in una particolare directory
+                NULLSYSCALL(req,(richiesta*)malloc(sizeof(richiesta)),"malloc");
+                req->op = WhereToSave; 
+                if((req->pathToSave=realpath(optarg,NULL))==NULL){
+                    perror("Errore nel convertire path locale in globale");
+                    return -1;
+                }
+                req->n=0;
+                req->path=NULL;
+                if(aggiungiInCoda(richieste,(void*) req)==-1){
+                    fprintf(stderr,"Errore aggiunta richiesta di lettura file %s\n",req->path);
+                }
                 break;
             case 't':
                 if(isNumber(optarg,&(config->millisec))!=0){
@@ -159,20 +134,17 @@ int ottieniRichieste(config_client* config, t_coda* richieste, int argc, char** 
                 tmpstr=NULL;
                 token=strtok_r(optarg,",",&tmpstr);
                 while(token!=NULL){
-                    NULLSYSCALL(p,malloc(sizeof(nodo)),"malloc");
-                    NULLSYSCALL(p->val,(void*)malloc(sizeof(richiesta)),"malloc");
-                    ((richiesta*)p->val)->op=DeleteFile; 
-                    int len = strlen(token)+1;
-                    ((richiesta*)p->val)->path = malloc(len);
-                    if(((richiesta*)p->val)->path==NULL){
-                        perror("malloc");
+                    NULLSYSCALL(req,(richiesta*)malloc(sizeof(richiesta)),"malloc");
+                    req->op = DeleteFile; 
+                    if((req->path=realpath(token,NULL))==NULL){
+                        perror("Errore nel convertire path locale in globale");
                         return -1;
                     }
-                    strncpy(((richiesta*)p->val)->path,token,len);
-                    ((richiesta*)p->val)->n=0;
-                    ((richiesta*)p->val)->pathToSave=NULL;
-                    p->next=NULL;
-                    aggiungiInCoda(richieste,p); //aggiungo richiesta di cancellazione file alla coda
+                    req->n=0;
+                    req->pathToSave=NULL;
+                    if(aggiungiInCoda(richieste,(void*) req)==-1){
+                        fprintf(stderr,"Errore aggiunta richiesta di lettura file %s\n",req->path);
+                    }
                     token = strtok_r(NULL, ",", &tmpstr);
                 }
                 break;
@@ -189,15 +161,14 @@ int ottieniRichieste(config_client* config, t_coda* richieste, int argc, char** 
                 return -1;
             case ':' :
                 if(optopt=='R'){
-                    NULLSYSCALL(p,malloc(sizeof(nodo)),"malloc");
-                    NULLSYSCALL(p->val,(void*)malloc(sizeof(richiesta)),"malloc");
-                    ((richiesta*)p->val)->op=ReadNFiles; //operazione richiesta
-                    ((richiesta*)p->val)->path=NULL;
-                    ((richiesta*)p->val)->n=-1;
-                    ((richiesta*)p->val)->pathToSave=NULL;
-                    p->next=NULL;
-                    aggiungiInCoda(richieste,p);
-                    break;
+                    NULLSYSCALL(req,(richiesta*)malloc(sizeof(richiesta)),"malloc");
+                    req->op = ReadNFiles; 
+                    req->pathToSave=NULL;
+                    req->path=NULL;
+                    req->n=-1;
+                    if(aggiungiInCoda(richieste,(void*) req)==-1){
+                        fprintf(stderr,"Errore aggiunta richiesta di lettura N file \n");
+                    }
                 }
                 else{
                     printf("Opzione %c richiede parametri\n", optopt);
@@ -259,7 +230,7 @@ int isDirectory(char* file){
 int scanDirectory(char* directory, t_coda* richieste, int n){
     static int i=0;
     char buf[MAX_PATH_LENGTH];
-    nodo* p;
+    richiesta* req;
      if(getcwd(buf, MAX_PATH_LENGTH)==NULL){
         perror("getcwd");
         return -1;
@@ -282,18 +253,17 @@ int scanDirectory(char* directory, t_coda* richieste, int n){
         }
         else if(strcmp(file->d_name,".")!=0 && strcmp(file->d_name,"..")!=0){
             if(i<n){
-                NULLSYSCALL(p,malloc(sizeof(nodo)),"malloc");
-                NULLSYSCALL(p->val,(void*)malloc(sizeof(richiesta)),"malloc");
-                ((richiesta*)p->val)->op = WriteFile; 
-                ((richiesta*)p->val)->path=realpath(file->d_name,NULL);
-                if(((richiesta*)p->val)->path==NULL){
-                    printf("Errore path nell'operazione -W\n");
+                NULLSYSCALL(req,(richiesta*)malloc(sizeof(richiesta)),"malloc");
+                req->op = WriteFile; 
+                if((req->path=realpath(file->d_name,NULL))==NULL){
+                    perror("Errore nel convertire path locale in globale");
                     return -1;
                 }
-                ((richiesta*)p->val)->n=0;
-                ((richiesta*)p->val)->pathToSave=NULL;
-                p->next=NULL;
-                aggiungiInCoda(richieste,p);
+                req->n=0;
+                req->pathToSave=NULL;
+                if(aggiungiInCoda(richieste,(void*) req)==-1){
+                    fprintf(stderr,"Errore aggiunta richiesta di scrittura file %s\n",req->path);
+                }
                 i++;
             }
             else
