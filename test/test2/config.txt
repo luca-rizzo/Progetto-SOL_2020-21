@@ -1,0 +1,4 @@
+n_workers: 4
+n_max_file: 10
+max_storage: 1048576
+sockname:  ./tmp/csSock
