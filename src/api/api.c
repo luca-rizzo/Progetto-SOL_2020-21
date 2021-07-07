@@ -4,10 +4,10 @@
 int fd_skt=-1;
 const char* socketname=NULL;
 static char* ottieniNomeDaPath(char* path);
-int isDirectory(const char* file);
 static struct timespec difftimespec(struct timespec begin, struct timespec end);
 static int BThenA(struct timespec a,struct timespec b);
-
+//permette di aprire una connessione con il server tramite il socket file sockname
+//ritorna 0 in caso di successo; -1 in caso di fallimento, setta errno
 int openConnection(const char* sockname, int msec, const struct timespec abstime){
     if(fd_skt!=-1){ //sei già connesso
         errno=EISCONN;
@@ -53,7 +53,7 @@ int openConnection(const char* sockname, int msec, const struct timespec abstime
         }
         tempoPassato=difftimespec(tempoInizio,tempoCorrente);
     }
-    if(res==-1){
+    if(res==-1){ // sono uscito perchè è scaduto il timer
         fd_skt=-1;
         errno = ETIMEDOUT;
         return -1;
@@ -61,43 +61,53 @@ int openConnection(const char* sockname, int msec, const struct timespec abstime
     socketname=sockname;
     return 0;
 }
-int closeConnection(const char* sockname){//comunico al server che chiudo la connessione
+//permette di chiudere la connessione associata al socket file sockname. 
+//ritorna 0 in caso di successo, -1 in caso di fallimento, setta errno
+int closeConnection(const char* sockname){
     int len=strlen(sockname);
     if(strncmp(sockname,socketname,len+1)!=0){
         errno=ENOTCONN;
         return -1;
     }
-    int notused;
-    NEGSYSCALL(notused, close(fd_skt), "close");
     socketname=NULL;
+    if(close(fd_skt)==-1){
+        return -1;
+    }
     fd_skt=-1;
     return 0;
 }
+//permette di aprire il file pathname nel server; se flags=O_CREAT permette di creare il file (se questo non esiste)
+//ritorna 0 in caso di successo, -1 in caso di fallimento, setta errno;
 int openFile(const char* pathname,int flags){
-    if(pathname==NULL){
+    if(pathname==NULL){ //parametri non validi
         errno =EINVAL;
         return -1;
     }
-    if(fd_skt==-1){
+    if(fd_skt==-1){ //non sei connesso al server
         errno=ENOTCONN;
         return -1;
     }
     t_op operazione=op; //open
-    if(writen(fd_skt,&operazione,sizeof(t_op))==-1){//secondo il protocollo di comunicazione invio operazione da effettuare
+    //secondo il protocollo di comunicazione invio operazione da effettuare
+    if(writen(fd_skt,&operazione,sizeof(t_op))==-1){
         return -1; //errno settata da writen
     }
+    //secondo il protocollo di comunicazione invio lunghezza path, path del file da aprire e relativi flag
     int len=strlen(pathname)+1;
-    if(writen(fd_skt,&len,sizeof(int))==-1){//secondo il protocollo di comunicazione invio lunghezza path, path del file da aprire e relativi flag
+    if(writen(fd_skt,&len,sizeof(int))==-1){
         return -1;
     }
+    //invio path
     if(writen(fd_skt,(void*)pathname,len)==-1){
         return -1;
     }
+    //invio flag
     if(writen(fd_skt,&flags,sizeof(int))==-1){
         return -1;
     }
     int res;
-    if(readn(fd_skt,&res,sizeof(int))==-1){ //leggo il risultato dell'operazione
+    //leggo il risultato dell'operazione
+    if(readn(fd_skt,&res,sizeof(int))==-1){ 
         return -1;
     }
     if(res!=0){
@@ -108,27 +118,30 @@ int openFile(const char* pathname,int flags){
     return 0;
 }
 int readFile(const char* pathname, void** buf, size_t* size){
-    if(pathname==NULL){
+    if(pathname==NULL){ //parametri non validi
         errno =EINVAL;
         return -1;
     }
-    if(fd_skt==-1){
+    if(fd_skt==-1){ //non sei connesso al server
         errno=ENOTCONN;
         return -1;
     }
     t_op operazione=rd;
-    if(writen(fd_skt,&operazione,sizeof(t_op))==-1){//secondo il protocollo di comunicazione invio operazione da effettuare
+    //secondo il protocollo di comunicazione invio operazione da effettuare
+    if(writen(fd_skt,&operazione,sizeof(t_op))==-1){
         return -1; //errno settata da writen
     }
+    //secondo il protocollo di comunicazione invio lunghezza path e path del file da leggere
     int len=strlen(pathname)+1;
-    if(writen(fd_skt,&len,sizeof(int))==-1){//secondo il protocollo di comunicazione invio lunghezza path e path del file da leggere
+    if(writen(fd_skt,&len,sizeof(int))==-1){
         return -1;
     }
     if(writen(fd_skt,(void*)pathname,len)==-1){
         return -1;
     }
+    //leggo il risultato dell'operazione
     int res;
-    if(readn(fd_skt,&res,sizeof(int))==-1){ //leggo il risultato dell'operazione
+    if(readn(fd_skt,&res,sizeof(int))==-1){ 
         return -1;
     }
     if(res!=0){
@@ -138,7 +151,8 @@ int readFile(const char* pathname, void** buf, size_t* size){
     //l'operazione è terminata correttamente
     size_t dim;
     int nread;
-    if((nread=readn(fd_skt,&dim,sizeof(size_t)))==-1){ //leggo la dimensione del file
+    //leggo la dimensione del file
+    if((nread=readn(fd_skt,&dim,sizeof(size_t)))==-1){ 
         return -1;
     }
     if(nread==0){
@@ -159,15 +173,16 @@ int readFile(const char* pathname, void** buf, size_t* size){
     }
     *size=dim; //ritorno byte letti
     (*buf)=buffer; //ritorno contenuto file
+    //l'operazione è terminata correttamente -> il file è stato letto
     return 0;
 }
 //permette di scrivere sul server un file solo se l'ultima operazione sul file è stata la sua creazione
 int writeFile(const char* pathname, const char* dirname){
-    if(pathname==NULL){
+    if(pathname==NULL){ //parametri non validi
         errno =EINVAL;
         return -1;
     }
-    if(fd_skt==-1){
+    if(fd_skt==-1){ //non sei connesso
         errno=ENOTCONN;
         return -1;
     }
@@ -191,6 +206,14 @@ int writeFile(const char* pathname, const char* dirname){
     }
     rewind(ifp);
     void* buffer= malloc(size);
+    if(buffer==NULL){
+        
+        if(fclose(ifp)!=0){
+            return -1;
+        }
+        return -1;
+    }
+    //leggo contenuto file in buffer
     if(fread(buffer,1,size,ifp)<size){
         free(buffer);
         errno = EIO;
@@ -240,7 +263,6 @@ int writeFile(const char* pathname, const char* dirname){
         errno=res;
         return -1;
     } //posso inviare il file
-
     //secondo il protocollo di comunicazione invio dimensione file e contenuto
     if(writen(fd_skt,&size,sizeof(size_t))==-1){
         free(buffer);
@@ -249,33 +271,34 @@ int writeFile(const char* pathname, const char* dirname){
         }
         return -1;
     }
-    if(writen(fd_skt, buffer, size)==-1){
-        free(buffer);
-        if(fclose(ifp)!=0){
-            return -1;
-        }
+    //se il file non è vuoto invio contenuto
+    if(size>0){
+        if(writen(fd_skt, buffer, size)==-1){
+            free(buffer);
+            if(fclose(ifp)!=0){
+                return -1;
+            }
         return -1;
+        }
     }
+    free(buffer);
     if(readn(fd_skt,&res,sizeof(int))==-1){ //leggo il risultato dell'operazione
-        free(buffer);
         if(fclose(ifp)!=0){
             return -1;
         }
         return -1;
     }
     if(res!=0){
-        free(buffer);
         if(fclose(ifp)!=0){
             return -1;
         }
         errno=res;
         return -1;
     }
-    free(buffer);
     if(fclose(ifp)!=0){
         return -1;
     }
-    //operazione terminata correttamente
+    //l'operazione è terminata correttamente -> il file è stato scritto
     return 0;
 }
 int removeFile(const char* pathname){
@@ -283,7 +306,7 @@ int removeFile(const char* pathname){
         errno = EINVAL;
         return -1;
     }
-    if(fd_skt==-1){
+    if(fd_skt==-1){ //non sei connesso
         errno=ENOTCONN;
         return -1;
     }
@@ -314,7 +337,7 @@ int closeFile(const char* pathname){
         errno = EINVAL;
         return -1;
     }
-    if(fd_skt==-1){
+    if(fd_skt==-1){//non sei connesso
         errno=ENOTCONN;
         return -1;
     }
@@ -371,27 +394,26 @@ int appendToFile(const char* pathname, void* buf, size_t size, const char* dirna
     } //posso inviare buf
 
     //secondo il protocollo di comunicazione invio dimensione file e contenuto
-    if(writen(fd_skt,&size,sizeof(size_t))==-1){//invio dimensione
+    //invio dimensione
+    if(writen(fd_skt,&size,sizeof(size_t))==-1){
         return -1;
     }
-    if(writen(fd_skt, buf, size)==-1){//invio contenuto
+    //invio contenuto
+    if(writen(fd_skt, buf, size)==-1){
         return -1;
     }
-    if(readn(fd_skt,&res,sizeof(int))==-1){ //leggo il risultato dell'operazione
+    //leggo il risultato dell'operazione
+    if(readn(fd_skt,&res,sizeof(int))==-1){ 
         return -1;
     }
     if(res!=0){
         errno=res;
         return -1;
     }
-    //operazione terminata correttamente
+    //operazione terminata correttamente-> contenuto appeso al file
     return 0;    
 }
 int readNFiles(int N, const char* dirname){
-    if(isDirectory(dirname)!=1){
-        errno=EIO;
-        return -1;
-    }
     if(fd_skt==-1){
         errno=ENOTCONN;
         return -1;
@@ -414,11 +436,10 @@ int readNFiles(int N, const char* dirname){
     } 
     //l'operazione è terminata correttamente: il server ha letto un numero di file pari a res
     
-    
     int len;  
     void* path;
     int nread;
-    FILE* ifp;
+
     for(int i=0;i<res;i++){
         if((nread=readn(fd_skt,&len,sizeof(int)))==-1){ //secondo il protocollo di comunicazione leggo lunghezza path e path
             return -1; //setta errno
@@ -432,6 +453,7 @@ int readNFiles(int N, const char* dirname){
             return -1;
         }
         if((nread=readn(fd_skt,path,len))==-1){
+            free(path);
             return -1; //setta errno
         }
         if(nread==0){
@@ -445,47 +467,62 @@ int readNFiles(int N, const char* dirname){
             return -1;
         }
         void* buffer=NULL;
-        fprintf(stdout,"%ld\n",dim);
         if(dim!=0){
             buffer=malloc(dim); //alloco un buffer di tale dimensione
             if(buffer==NULL){
                 free(path);
-                perror("malloc");
                 return -1;
             }
             if(readn(fd_skt,buffer,dim)==-1){ //leggo contenuto file
+                free(path);
                 return -1;
             }
-            
         }
-        char* nomeFile=ottieniNomeDaPath(path);
-        int dimNewPath=strlen(nomeFile)+strlen(dirname)+1;
-        char* newPath=malloc(dimNewPath);
-        snprintf(newPath, dimNewPath, "%s%s", dirname, nomeFile);
-        free(path);
-        if((ifp=fopen(newPath,"wb"))==NULL){
-            free(newPath);
+        if(dirname==NULL){ //non devo salvare i file letti
+            free(path);
             if(buffer!=NULL)
                 free(buffer);
-            return -1; 
+            continue;
         }
-        if(buffer!=NULL){
-            if(fwrite(buffer,1,dim,ifp)<dim){
-                free(newPath);
-                if(buffer!=NULL)
-                    free(buffer);
-                errno = EIO;
-                if(fclose(ifp)!=0){
-                    return -1;
-                }
-                return -1;
-            }
+        if(scriviContenutoInDirectory(buffer,dim,path,(char*) dirname)==-1){
+            fprintf(stderr,"Errore nella scrittura su disco del file %s\n", (char*) path);
+            perror("scriviContenutoInDirectory");
         }
-        free(newPath);
+        free(path);
         if(buffer!=NULL)
             free(buffer);
     }
     return res;
+}
+//scrive il contenuto di buffer nella directory dirToSave in un file il cui nome è ottenuto da pathFile
+//ritorna 0 in caso di successo; -1 in caso di fallimento
+int scriviContenutoInDirectory(void* buffer, size_t size, char* pathFile, char* dirToSave){
+    FILE* ifp;
+    char* nomeFile=ottieniNomeDaPath(pathFile);
+    int dimNewPath=strlen(nomeFile)+strlen(dirToSave)+1;
+    char* newPath=malloc(dimNewPath);
+    if(newPath==NULL){
+        return -1;
+    }
+    snprintf(newPath, dimNewPath, "%s%s", dirToSave, nomeFile);
+    if((ifp=fopen(newPath,"wb"))==NULL){
+        free(newPath);
+        return -1;
+    }
+    if(buffer!=NULL){
+        if(fwrite(buffer,1,size,ifp)<size){
+            free(newPath);
+            if(fclose(ifp)!=0){
+                return -1;
+            }
+            return -1;
+        }
+    }
+    free(newPath);
+    if(fclose(ifp)!=0){
+        return -1;
+    }
+    return 0;
 }
 static char* ottieniNomeDaPath(char* path){
     if(path == NULL) {
