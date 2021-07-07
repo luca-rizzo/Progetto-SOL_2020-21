@@ -1,18 +1,19 @@
 #include<server.h>
 
-static int OpenFile(int fd_client);
-static int ReadFile(int fd_client);
-static int WriteFile(int fd_client);
-static int RemoveFile(int fd_client);
-static int CloseFile(int fd_client);
-static int AppendToFile(int fd_client);
-static int CloseConnection(int fd_client);
-static int ReadNFile(int fd_client);
+static int OpenFile(int fd_client, int myid);
+static int ReadFile(int fd_client, int myid);
+static int WriteFile(int fd_client, int myid);
+static int RemoveFile(int fd_client, int myid);
+static int CloseFile(int fd_client, int myid);
+static int AppendToFile(int fd_client, int myid);
+static int CloseConnection(int fd_client, int myid);
+static int ReadNFile(int fd_client, int myid);
 
 void funcW(void* arg){
     threadW_args* args= (threadW_args*) arg;
     int fd_client = args->fd_daServire;
     int pipe = args->pipe;
+    int myid = args->idWorker;
     free(arg);
     //gestione richieste
     int nonAggiungereFd=0;
@@ -28,20 +29,20 @@ void funcW(void* arg){
     } 
     if(nread==0){ //il client ha chiuso la connessione
         nonAggiungereFd=1; // non devo segnalare il server che deve riascoltare fd
-        if(CloseConnection(fd_client)==-1){
+        if(CloseConnection(fd_client, myid)==-1){
             perror("CloseConnection");
         }
     }
     else{
         switch(operazione){
             case op:
-                if(OpenFile(fd_client)==-1){
+                if(OpenFile(fd_client, myid)==-1){
                     if(writen(fd_client,&errno,sizeof(int))==-1){//invio errore
                         perror("writen");
                     }
                     if(errno==EBADMSG){
                         nonAggiungereFd=1; // non devo segnalare il server che deve riascoltare fd: errore nel protocollo di comunicazione
-                        if(CloseConnection(fd_client)==-1){ 
+                        if(CloseConnection(fd_client, myid)==-1){ 
                             perror("CloseConnection");
                         }
                     }
@@ -54,26 +55,26 @@ void funcW(void* arg){
                 }
                 break;
             case rd:
-                if(ReadFile(fd_client)==-1){
+                if(ReadFile(fd_client, myid)==-1){
                     if(writen(fd_client,&errno,sizeof(int))==-1){//invio errore
                         perror("writen");
                     }
                     if(errno==EBADMSG){
                         nonAggiungereFd=1; // non devo segnalare il server che deve riascoltare fd: errore nel protocollo di comunicazione
-                        if(CloseConnection(fd_client)==-1){
+                        if(CloseConnection(fd_client, myid)==-1){
                             perror("CloseConnection");
                         }
                     }
                 } //operazione completata inviata nella readFile
                 break;
             case wr:
-                if(WriteFile(fd_client)==-1){
+                if(WriteFile(fd_client, myid)==-1){
                     if(writen(fd_client,&errno,sizeof(int))==-1){//invio errore
                         perror("writen");
                     }
                     if(errno==EBADMSG){
                         nonAggiungereFd=1; // non devo segnalare il server che deve riascoltare fd: errore nel protocollo di comunicazione
-                        if(CloseConnection(fd_client)==-1){
+                        if(CloseConnection(fd_client, myid)==-1){
                             perror("CloseConnection");
                         }
                     }
@@ -86,13 +87,13 @@ void funcW(void* arg){
                 }
                 break;
             case ap:
-                if(AppendToFile(fd_client)==-1){
+                if(AppendToFile(fd_client, myid)==-1){
                     if(writen(fd_client,&errno,sizeof(int))==-1){//invio errore
                         perror("writen");
                     }
                     if(errno==EBADMSG){
                         nonAggiungereFd=1; // non devo segnalare il server che deve riascoltare fd: errore nel protocollo di comunicazione
-                        if(CloseConnection(fd_client)==-1){
+                        if(CloseConnection(fd_client, myid)==-1){
                             perror("CloseConnection");
                         }
                     }
@@ -105,14 +106,14 @@ void funcW(void* arg){
                 }
                 break;
             case re:
-                if(RemoveFile(fd_client)==-1){
+                if(RemoveFile(fd_client, myid)==-1){
                     
                     if(writen(fd_client,&errno,sizeof(int))==-1){//invio errore
                         perror("writen");
                     }
                     if(errno==EBADMSG){
                         nonAggiungereFd=1; // non devo segnalare il server che deve riascoltare fd: errore nel protocollo di comunicazione
-                        if(CloseConnection(fd_client)==-1){
+                        if(CloseConnection(fd_client, myid)==-1){
                             perror("CloseConnection");
                         }
                     }
@@ -125,13 +126,13 @@ void funcW(void* arg){
                 }
                 break;
             case cl:
-                if(CloseFile(fd_client)==-1){
+                if(CloseFile(fd_client, myid)==-1){
                     if(writen(fd_client,&errno,sizeof(int))==-1){//invio errore
                         perror("writen");
                     }
                     if(errno==EBADMSG){
                         nonAggiungereFd=1; // non devo segnalare il server che deve riascoltare fd: errore nel protocollo di comunicazione
-                        if(CloseConnection(fd_client)==-1){
+                        if(CloseConnection(fd_client, myid)==-1){
                             perror("CloseConnection");
                         }
                     }
@@ -144,18 +145,25 @@ void funcW(void* arg){
                 }
                 break;
             case rn:
-                if(ReadNFile(fd_client)==-1){
+                if(ReadNFile(fd_client, myid)==-1){
                     if(writen(fd_client,&errno,sizeof(int))==-1){//invio errore
                         perror("writen");
                     }
                     if(errno==EBADMSG){
-                        
+                        nonAggiungereFd=1; // non devo segnalare il server che deve riascoltare fd: errore nel protocollo di comunicazione
+                        if(CloseConnection(fd_client, myid)==-1){
+                            perror("CloseConnection");
+                        }
                     }
                 }//operazione completata inviata nella readNFile
                 break;
             default:
+                errno=EBADMSG;
+                if(writen(fd_client,&errno,sizeof(int))==-1){//invio errore
+                    perror("writen");
+                }
                 nonAggiungereFd=1; // non devo segnalare il server che deve riascoltare fd: errore nel protocollo di comunicazione
-                if(CloseConnection(fd_client)==-1){
+                if(CloseConnection(fd_client, myid)==-1){
                     perror("CloseConnection");
                 }
                 break;
@@ -205,7 +213,7 @@ int doneWrite(t_file* file){
     UNLOCK_RETURN(&(file->mtx),-1);
     return 0;
 }
-static int OpenFile(int fd_client){
+static int OpenFile(int fd_client, int myid){
     //secondo il protocollo di comunicazione leggo lunghezza path, contenuto path e flag
     int len;  
     void* buffer;
@@ -284,6 +292,7 @@ static int OpenFile(int fd_client){
                 free(buffer);
                 return -1;
             }
+            scriviSuFileLog(logStr,"Thread %d: apertura del file %s su richiesta del client %d.\n\n",myid,buffer,fd_client);
             free(buffer);
             return 0;
         }
@@ -294,15 +303,6 @@ static int OpenFile(int fd_client){
             errno=ENOENT;
             UNLOCK_RETURN(&(file_storage->mtx),-1);
             return -1;
-        }
-        if(file_storage->numeroFile==config.maxNumeroFile){ //ho raggiunto il numero massimo di file memorizzabili?
-            if(espelliFile(NULL)==-1){//se si espelli un file
-                errno=EPROTO;
-                free(buffer);
-                UNLOCK_RETURN(&(file_storage->mtx),-1);
-                return -1;
-            }
-            file_storage->nReplacement+=1;
         }
         //creo un nuovo file
         t_file* file = malloc(sizeof(t_file));
@@ -368,6 +368,16 @@ static int OpenFile(int fd_client){
             UNLOCK_RETURN(&(file_storage->mtx),-1);
 	        return -1;
         }
+        //ho raggiunto il numero massimo di file memorizzabili?
+        if(file_storage->numeroFile==config.maxNumeroFile){ 
+            if(espelliFile(file,myid)==-1){//se si espelli un file
+                errno=EPROTO;
+                free(buffer);
+                UNLOCK_RETURN(&(file_storage->mtx),-1);
+                return -1;
+            }
+            file_storage->nReplacement+=1;
+        }
         if(icl_hash_insert(file_storage->storage, buffer,(void*) file)==NULL){
 	        errno=EPROTO;
             liberaFile(file);
@@ -379,10 +389,11 @@ static int OpenFile(int fd_client){
         if(file_storage->numeroFile>file_storage->maxFile)
             file_storage->maxFile=file_storage->numeroFile;
         UNLOCK_RETURN(&(file_storage->mtx),-1);
+        scriviSuFileLog(logStr,"Thread %d: creazione del file %s su richiesta del client %d.\n\n",myid,buffer,fd_client);
         return 0;
     }
 }
-static int ReadFile(int fd_client){
+static int ReadFile(int fd_client, int myid){
     //secondo il protocollo di comunicazione leggo lunghezza path e contenuto path 
     int len;  
     void* buffer;
@@ -446,9 +457,10 @@ static int ReadFile(int fd_client){
         }
     }
     SYSCALLRETURN(doneRead(file),-1);
+    scriviSuFileLog(logStr,"Thread %d: lettura del file %s su richiesta del client %d. %d bytes sono stati inviati al client.\n\n", myid, file->path, fd_client, file->dimByte);
     return 0;
 }
-static int WriteFile(int fd_client){
+static int WriteFile(int fd_client, int myid){
     //secondo il protocollo di comunicazione leggo lunghezza path e contenuto path 
     int len;  
     void* buffer;
@@ -521,19 +533,21 @@ static int WriteFile(int fd_client){
         UNLOCK_RETURN(&(file_storage->mtx),-1);
         return -1;
     }
-    //leggo contenuto
-    if((nread=readn(fd_client,buffer,size))==-1){ 
-        free(buffer);
-        SYSCALLRETURN(doneWrite(file),-1);
-        UNLOCK_RETURN(&(file_storage->mtx),-1);
-        return -1; //setta errno
-    }
-    if(nread==0){
-        SYSCALLRETURN(doneWrite(file),-1);
-        UNLOCK_RETURN(&(file_storage->mtx),-1);
-        free(buffer);
-        errno=EBADMSG;
-        return -1;
+    //leggo contenuto se file non è vuoto
+    if(size>0){
+        if((nread=readn(fd_client,buffer,size))==-1){ 
+            free(buffer);
+            SYSCALLRETURN(doneWrite(file),-1);
+            UNLOCK_RETURN(&(file_storage->mtx),-1);
+            return -1; //setta errno
+        }
+        if(nread==0){
+            SYSCALLRETURN(doneWrite(file),-1);
+            UNLOCK_RETURN(&(file_storage->mtx),-1);
+            free(buffer);
+            errno=EBADMSG;
+            return -1;
+        }
     }
     if(size>config.maxDimbyte){ //il file è troppo grande
         errno=EFBIG;
@@ -544,7 +558,7 @@ static int WriteFile(int fd_client){
     }
     //il file potrebbe entrare nel file storage
     while(file_storage->dimBytes+size>config.maxDimbyte){//il file entra nel nostro storage o dobbiamo eliminare qualche file secondo la politica adottata?
-        if(espelliFile(file)==-1){
+        if(espelliFile(file,myid)==-1){
             errno=EPROTO;
             free(buffer);
             SYSCALLRETURN(doneWrite(file),-1);
@@ -569,10 +583,11 @@ static int WriteFile(int fd_client){
     file->dimByte=size;
     free(buffer);
     SYSCALLRETURN(doneWrite(file),-1);
+    scriviSuFileLog(logStr,"Thread %d: scrittura del file %s su richiesta del client %d. %d bytes sono stati scritti sul file.\n\n",myid,file->path,fd_client,size);
     return 0;
 }
 
-static int RemoveFile(int fd_client){
+static int RemoveFile(int fd_client, int myid){
     //secondo il protocollo di comunicazione leggo lunghezza path e contenuto path 
     int len;  
     void* buffer;
@@ -622,17 +637,18 @@ static int RemoveFile(int fd_client){
         UNLOCK_RETURN(&(file_storage->mtx),-1);
         return -1;
     }
-    free(buffer);
     file_storage->dimBytes-=size;
     file_storage->numeroFile--;
     UNLOCK_RETURN(&(file_storage->mtx),-1); //operazione distruttiva: rilascio la lock alla fine
+    scriviSuFileLog(logStr,"Thread %d: rimozione file %s su richiesta del client %d. %d bytes sono stati rimossi dal file server.\n\n",myid,buffer,fd_client,size);
+    free(buffer);
     return 0;
 }
 //la cancellazione funziona perchè io rilascio la lock globale solo quando accedo al file (prendo la lock): in tal modo è impossibile
 //che qualcuno cancelli il file mentre sono in attesa di accedere (lettura o scrittura) alla lock perchè se io attendo accesso ad un file,
 //mantengo la lock globale
 
-static int CloseFile(int fd_client){ //chiudere un file==rimuovere l'fd del client dalla lista degli fd del file
+static int CloseFile(int fd_client, int myid){ //chiudere un file==rimuovere l'fd del client dalla lista degli fd del file
 
     //secondo il protocollo di comunicazione leggo lunghezza path e contenuto path 
     int len;  
@@ -681,9 +697,10 @@ static int CloseFile(int fd_client){ //chiudere un file==rimuovere l'fd del clie
     }
     free(buffer);
     SYSCALLRETURN(doneWrite(file),-1);
+    scriviSuFileLog(logStr,"Thread %d: chiusura file %s su richiesta del client %d.\n\n",myid,file->path,fd_client);
     return 0;
 }
-static int AppendToFile(int fd_client){
+static int AppendToFile(int fd_client, int myid){
     //secondo il protocollo di comunicazione leggo lunghezza path e contenuto path 
     int len;  
     void* buffer;
@@ -748,7 +765,8 @@ static int AppendToFile(int fd_client){
         UNLOCK_RETURN(&(file_storage->mtx),-1);
         return -1;
     }
-    if((nread=readn(fd_client,buffer,size))==-1){ //leggo contenuto
+    //leggo contenuto da appendere al file
+    if((nread=readn(fd_client,buffer,size))==-1){ 
         free(buffer);
         SYSCALLRETURN(doneWrite(file),-1);
         UNLOCK_RETURN(&(file_storage->mtx),-1);
@@ -770,7 +788,7 @@ static int AppendToFile(int fd_client){
     }
     //il file potrebbe entrare nel fileStorage
     while(file_storage->dimBytes + size >config.maxDimbyte){ //dobbiamo eliminare qualche file?
-        if(espelliFile(file)==-1){
+        if(espelliFile(file,myid)==-1){
             errno=EPROTO;
             free(buffer);
             SYSCALLRETURN(doneWrite(file),-1);
@@ -808,11 +826,12 @@ static int AppendToFile(int fd_client){
     file->ultima_operazione=ap;
     free(buffer);
     SYSCALLRETURN(doneWrite(file),-1);
+    scriviSuFileLog(logStr,"Thread %d: scrittura in append sul file %s su richiesta del client %d. %d bytes sono stati appesi al file.\n\n",myid,file->path,fd_client,size);
     return 0;
 }
 //chiude la connessione con il client: rimuove fd_client da lista client connessi e fd_client dalla lista di ogni file
 //ritorna 0 in caso di successo,-1 in caso di fallimento; setta errno
-static int CloseConnection(int fd_client){ 
+static int CloseConnection(int fd_client, int myid){ 
     LOCK_RETURN(&(file_storage->mtx),-1);
     icl_entry_t *bucket, *curr;
     t_file* file;
@@ -847,10 +866,11 @@ static int CloseConnection(int fd_client){
     if(close(fd_client)==-1){
         perror("Close");
     }
+    scriviSuFileLog(logStr,"Thread %d: chiusura connessione con client %d\n\n",myid,fd_client);
     printf("Connessione terminata\n");
     return 0;
 }
-static int ReadNFile(int fd_client){
+static int ReadNFile(int fd_client, int myid){
     int n;
     int nread;
     int numFileDaInviare;
@@ -899,6 +919,7 @@ static int ReadNFile(int fd_client){
         distruggiCoda(fileDaInviare,NULL);
         return -1;
     }
+    int sizetot=0;
     nodo* p=prelevaDaCoda(fileDaInviare);
     while(p!=NULL){
         t_file* file=(t_file*) p->val;
@@ -928,10 +949,12 @@ static int ReadNFile(int fd_client){
                 return -1;
             }
         }
+        sizetot+=file->dimByte;
         free(p); //non devo liberare il file ma solo il nodo!
         p=prelevaDaCoda(fileDaInviare);
         SYSCALLRETURN(doneRead(file),-1);
     }
     distruggiCoda(fileDaInviare,NULL);
+    scriviSuFileLog(logStr,"Thread %d: lettura %d file su richiesta del client %d. %d byte sono stati inviati al client.\n\n",myid,c,fd_client,sizetot);
     return 0;
 }
