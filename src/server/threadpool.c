@@ -3,14 +3,7 @@
  * @brief File di implementazione dell'interfaccia Threadpool
  */
 
-#include <stdio.h>
-#include <assert.h>
-#include <stdlib.h>
-#include <pthread.h>
-#include <unistd.h>
-#include <errno.h>
-#include <util.h>
-#include <threadpool.h>
+#include<server.h>
 
 /**
  * @function void *threadpool_thread(void *threadpool)
@@ -33,7 +26,6 @@ static void *workerpool_thread(void *threadpool) {
 
     LOCK_RETURN(&(pool->lock), NULL);
     for (;;) {
-
         // in attesa di un messaggio, controllo spurious wakeups.
         while((pool->count == 0) && (!pool->exiting)) {
             pthread_cond_wait(&(pool->cond), &(pool->lock));
@@ -52,7 +44,7 @@ static void *workerpool_thread(void *threadpool) {
 
 	    pool->taskonthefly++;
         UNLOCK_RETURN(&(pool->lock), NULL);
-
+        ((threadW_args*)task.arg)->idWorker=myid;
         // eseguo la funzione 
         (*(task.fun))(task.arg);
 	
@@ -60,8 +52,6 @@ static void *workerpool_thread(void *threadpool) {
 	    pool->taskonthefly--;
     }
     UNLOCK_RETURN(&(pool->lock), NULL);
-
-    fprintf(stderr, "thread %d exiting\n", myid);
     return NULL;
 }
 
@@ -115,8 +105,7 @@ threadpool_t *createThreadPool(int numthreads, int pending_size) {
 	    return NULL;
     }
     for(int i = 0; i < numthreads; i++) {
-        if(pthread_create(&(pool->threads[i]), NULL,
-                          workerpool_thread, (void*)pool) != 0) {
+        if(pthread_create(&(pool->threads[i]), NULL, workerpool_thread, (void*)pool) != 0) {
 	    /* errore fatale, libero tutto forzando l'uscita dei threads */
             destroyThreadPool(pool, 1);
 	    errno = EFAULT;
@@ -192,44 +181,5 @@ int addToThreadPool(threadpool_t *pool, void (*f)(void *), void *arg) {
       return -1;
     }
     UNLOCK_RETURN(&(pool->lock),-1);
-    return 0;
-}
-
-
-/**
- * @function void *thread_proxy(void *argl)
- * @brief funzione eseguita dal thread worker che non appartiene al pool
- */
-static void *proxy_thread(void *arg) {    
-    taskfun_t *task = (taskfun_t*)arg;
-    // eseguo la funzione 
-    (*(task->fun))(task->arg);
-    
-    free(task);
-    return NULL;
-}
-
-// fa lo spawn di un thread in modalità detached
-int spawnThread(void (*f)(void*), void* arg) {
-    if (f == NULL) {
-	errno = EINVAL;
-	return -1;
-    }
-
-    taskfun_t *task = malloc(sizeof(taskfun_t));   // la memoria verra' liberata dal proxy 
-    if (!task) return -1;
-    task->fun = f;
-    task->arg = arg;
-
-    pthread_t thread;
-    pthread_attr_t attr;
-    if (pthread_attr_init(&attr) != 0) return -1;
-    if (pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) != 0) return -1;
-    if (pthread_create(&thread, &attr,
-		      proxy_thread, (void*)task) != 0) {
-	free(task);
-	errno = EFAULT;
-	return -1;
-    }
     return 0;
 }
