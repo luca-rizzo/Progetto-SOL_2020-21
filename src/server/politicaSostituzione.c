@@ -1,23 +1,25 @@
-#include<util.h>
 #include<server.h>
+
 static int BThenA(struct timespec a,struct timespec b);
 static t_file* FIFO(t_file* file1, t_file* file2);
 static int trovaVittima(t_file** fileDaEspellere,t_file* notToRemove);
 
 //da chiamare con la lock sulla struttura dati e una writelock su notToRemove
-int espelliFile(t_file* notToRemove){
+int espelliFile(t_file* notToRemove, int myid){
     t_file* fileDaEspellere=NULL;
     trovaVittima(&fileDaEspellere,notToRemove);
     SYSCALLRETURN(startWrite(fileDaEspellere),-1);
     int size = fileDaEspellere -> dimByte;
-    fprintf(stderr, "Ho espulso il file: %s\n", fileDaEspellere->path);
-    if(icl_hash_delete(file_storage->storage,(void*) fileDaEspellere->path,free,liberaFile)==-1){
+    //fprintf(stderr, "Ho espulso il file: %s\n", fileDaEspellere->path);
+    if(icl_hash_delete(file_storage->storage,(void*) fileDaEspellere->path,free,NULL)==-1){
         if(fileDaEspellere!=NULL)
             SYSCALLRETURN(doneWrite(fileDaEspellere),-1);
         return -1;
     }
     file_storage->dimBytes-=size;
     file_storage->numeroFile--;
+    scriviSuFileLog(logStr,"Thread %d: ALGORITMO RIMPIAZZAMENTO. File %s è stato espulso per far spazio a file %s\n\n", myid, fileDaEspellere->path , notToRemove->path);
+    liberaFile(fileDaEspellere);
     return 0;
 }
 //ritorna 0 in caso di successo; -1 in caso di fallimento
