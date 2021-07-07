@@ -15,7 +15,7 @@ DYNLINK		= -Wl,-rpath=${LIB_DIR} -L ${LIB_DIR}
 
 #OBJECTS
 CLIENT_OBJS = objs/client/client.o objs/client/parseLineaComando.o objs/client/eseguiRichieste.o 
-SERVER_OBJS = objs/server/server.o objs/server/threadpool.o objs/server/threadW.o objs/server/politicaSostituzione.o
+SERVER_OBJS = objs/server/server.o objs/server/threadpool.o objs/server/threadW.o objs/server/politicaSostituzione.o objs/server/log.o
 LIB_API_OBJS = objs/api/api.o;
 LIB_STRUTTURE_DATI_OBJS = objs/struttureDati/coda.o objs/struttureDati/icl_hash.o
 #BIN
@@ -68,7 +68,7 @@ test1: 	cleanTest1
 		valgrind --leak-check=full $(SERVER_BIN) test/test1/config.txt &
 #aspetto si avvii server
 		@sleep 2 
-		./script/test1.1.sh
+		./script/test1.sh
 		@killall -s 1 -w memcheck-amd64-
 #aspetto che valgrind stampi risultati
 		@sleep 1
@@ -93,3 +93,6 @@ cleanTest1:
 
 cleanTest2: 
 		rm -f -r test/test2/fileLetti/*/*
+
+
+
