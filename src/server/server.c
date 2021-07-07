@@ -6,16 +6,17 @@ t_file_storage* file_storage;
 config_server config;
 //struttura dati che tiene traccia del numero di client connessi e gli effettivi client connessi
 clientConnessi* clientAttivi;
+//struttura dati usata per gestire file log
+t_log* logStr;
 
-int inizializzaFileStorage(int argc, char** argv);
-int inizializzaClientAttivi();
-int ottieniNumClientConnessi();
-void liberaFile (void* val);
-int updatemax(fd_set set, int fdmax);
-int ottieniConfigServer(char* pathConfig);
-void stampaInformazioni();
-int aggiungiConnessione(int fd_client);
-int chiudiTutteConnessioni();
+static int inizializzaFileStorage(int argc, char** argv);
+static int inizializzaClientAttivi();
+static int ottieniNumClientConnessi();
+static int updatemax(fd_set set, int fdmax);
+static int ottieniConfigServer(char* pathConfig);
+static void stampaInformazioni();
+static int aggiungiConnessione(int fd_client);
+static int chiudiTutteConnessioni();
 
 static void *sigHandler(void *arg) {
     sigset_t *set = ((sigHandler_t*)arg)->set;
@@ -31,7 +32,8 @@ static void *sigHandler(void *arg) {
 	    switch(sig) {
 	        case SIGINT:
 	        case SIGQUIT:
-	            printf("ricevuto segnale %s, esco il prima possibile\n", (sig==SIGINT) ? "SIGINT":"SIGQUIT");
+	            //fprintf(stdout,"Ricevuto segnale %s, esco il prima possibile\n", (sig==SIGINT) ? "SIGINT":"SIGQUIT");
+                scriviSuFileLog(logStr, "Signal handler thread: ricevuto segnale %s, esco il prima possibile\n\n", (sig==SIGINT) ? "SIGINT":"SIGQUIT");
                 if(writen(fd_pipe,&sig,sizeof(int))==-1){ //notifico il listener thread della ricezione del segnale indicando quale segnale ho ricevuto
                     perror("writen sigHandler");
                     return NULL;
@@ -39,7 +41,8 @@ static void *sigHandler(void *arg) {
 	            close(fd_pipe);  
 	            return NULL;
             case SIGHUP:
-                printf("ricevuto segnale %s, esco non appena ho servito tutti i client\n", "SIGHUP");
+                //fprintf(stdout,"Ricevuto segnale %s, esco non appena ho servito tutti i client\n", "SIGHUP");
+                scriviSuFileLog(logStr, "Signal handler thread: ricevuto segnale %s, esco non appena ho servito tutti i client\n\n", "SIGHUP");
                 if(writen(fd_pipe,&sig,sizeof(int))==-1){ //notifico il listener thread della ricezione del segnale indicando quale segnale ho ricevuto
                     perror("writen sigHandler");
                     return NULL;
@@ -81,7 +84,7 @@ int main(int argc,char** argv){
     pthread_t sighandler_thread;
     sigHandler_t handlerArgs = { &mask, pfd[1]};
     if (pthread_create(&sighandler_thread, NULL, sigHandler, &handlerArgs) != 0) {
-		fprintf(stderr, "errore nella creazione del signal handler thread\n");
+		fprintf(stderr, "Errore nella creazione del signal handler thread\n");
 		return -1;
     }
     
@@ -106,7 +109,11 @@ int main(int argc,char** argv){
         printf("Errore nell'inizializzare il threads pool\n"); //errore fatale
         return -1;
     }
-
+    //creo struttura dati log
+    logStr=inizializzaFileLog(LOGDIR);
+    if(logStr==NULL){
+        fprintf(stderr,"Errore nell'inizializzare file di log\n");
+    }
     int fd_skt,fd_client;
     int fd_num=0;
     struct sockaddr_un sa;
@@ -165,12 +172,7 @@ int main(int argc,char** argv){
                         perror("aggiungiConnessione");
                         return -1; //errore fatale
                     }
-                    fprintf(stderr,"\nSTAMPA INFORMAZIONI\n");
-                    nodo* p = clientAttivi->client->head;
-                    fprintf(stderr,"oooooooooo");
-                    for(;p!=NULL;p=p->next){
-                        fprintf(stderr,"%d\t",*(int*)p->val);
-                    }
+                    scriviSuFileLog(logStr,"Thread dispatcher: apertura connessione con client %d\n\n",fd_client);
                     FD_SET(fd_client,&set);
                     if(fd_client>fd_num)
                         fd_num=fd_client;
@@ -204,8 +206,6 @@ int main(int argc,char** argv){
                         fd_num=fd_client;
                 }
                 else{ // nuova richiesta da un client
-                    fprintf(stderr,"\nSTAMPA INFORMAZIONIiiiiii\n");
-
                     threadW_args* args = malloc(sizeof(threadW_args));
                     if(args == NULL){
                         perror("Malloc"); //errore fatale
@@ -252,10 +252,15 @@ int main(int argc,char** argv){
         return -1;
     }
     //libero il file storage
-    icl_hash_destroy(file_storage->storage,free,liberaFile);
+    if(icl_hash_destroy(file_storage->storage,free,liberaFile)==-1){
+        fprintf(stderr,"Errore nella distruzione struttura hash file storage\n");
+    }
     pthread_mutex_destroy(&(file_storage->mtx));
     free(file_storage);
-
+    //libero logStr
+    if(distruggiStrutturaLog(logStr)==-1){
+        fprintf(stderr,"Errore nella distruzione struttura dati log\n");
+    }
     (void)unlink(config.sockname);
     //chiudo pipe usata per far comunicare workers e thread dispatcher
     close(readyDescr[0]);
@@ -268,7 +273,7 @@ int main(int argc,char** argv){
     return 0;
 }
 
-int inizializzaFileStorage(int argc, char** argv){
+static int inizializzaFileStorage(int argc, char** argv){
     if(argc<2 || ottieniConfigServer(argv[1])==-1){
         //VALORI DI DEFAULT
         fprintf(stdout,"Avvio il server con valori di default\n");
@@ -322,7 +327,7 @@ void liberaFile (void* val){
 
 
 // ritorno l'indice massimo tra i descrittori attivi
-int updatemax(fd_set set, int fdmax) {
+static int updatemax(fd_set set, int fdmax) {
     for(int i=(fdmax-1);i>=0;--i)
 	    if (FD_ISSET(i, &set)) 
             return i;
@@ -331,7 +336,7 @@ int updatemax(fd_set set, int fdmax) {
 
 
 //ritorna 0 se ho ottenuto le richieste tutte correttamente; -1 altrimenti
-int ottieniConfigServer(char* pathConfig){
+static int ottieniConfigServer(char* pathConfig){
     if(pathConfig ==NULL)
         return -1;
     FILE* ifp;
@@ -424,7 +429,7 @@ int ottieniConfigServer(char* pathConfig){
     return 0;
 }
 
-int inizializzaClientAttivi(){
+static int inizializzaClientAttivi(){
     clientAttivi= malloc(sizeof(clientConnessi));
     if(clientAttivi==NULL){
         printf("Errore fatale");
@@ -446,7 +451,7 @@ int inizializzaClientAttivi(){
 
 //aggiunge fd all'insieme dei client connessi
 //ritorna 0 in caso di successo, -1 altrimenti
-int aggiungiConnessione(int fd_client){
+static int aggiungiConnessione(int fd_client){
     LOCK_RETURN(&(clientAttivi->mtx),-1);
     if(isInCoda(clientAttivi->client,&fd_client)){
         UNLOCK_RETURN(&(clientAttivi->mtx),-1);
@@ -469,7 +474,7 @@ int aggiungiConnessione(int fd_client){
     return 0;
 }
 
-int ottieniNumClientConnessi(){
+static int ottieniNumClientConnessi(){
     int r;
     LOCK_RETURN(&(clientAttivi->mtx),-1);
     r=clientAttivi->nclient;
@@ -477,12 +482,13 @@ int ottieniNumClientConnessi(){
     return r;
 }
 
-void stampaInformazioni(){
+static void stampaInformazioni(){
     fprintf(stdout,"\nSTAMPA INFORMAZIONI\n");
     fprintf(stdout,"Numero massimo di file memorizzato nel file storage: %d\n", file_storage->maxFile);
     fprintf(stdout,"Dimensione massima del file storage: %ld\n", file_storage->maxDimBytes);
     fprintf(stdout,"Numero di volte in cui è stato eseguito algoritmo di rimpiazzamento: %d\n", file_storage->nReplacement);
     fprintf(stdout,"Lista file presenti nel file storage al momento della chiusura:\n");
+    fprintf(stdout,"%-130s\tDIMENSIONE IN BYTE\n","NOME FILE");
     icl_entry_t *bucket, *curr;
     t_file* file;
     int i;
@@ -492,12 +498,12 @@ void stampaInformazioni(){
         for (curr=bucket; curr!=NULL; ) {
             file=(t_file*) curr->data;
             //non ho bisogno di acquisire lock sul file perchè ormai vi è solo il main thread
-            fprintf(stdout,"%s\t%ld\n",file->path,file->dimByte);
+            fprintf(stdout,"%-130s\t%ld\n",file->path,file->dimByte);
             curr=curr->next;
         }
     }
 }
-int chiudiTutteConnessioni(){
+static int chiudiTutteConnessioni(){
     nodo* conn;
     int fd_toClose;
     conn=prelevaDaCoda(clientAttivi->client); //non ho bisogno di acquisire la lock perchè ormai non c'è più concorrenza
