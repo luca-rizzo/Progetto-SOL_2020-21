@@ -10,6 +10,7 @@ typedef struct node nodo;
 typedef struct{
     nodo* tail;
     nodo* head;
+    int size;
     int (*cmp) (void*,void*);
 }t_coda;
 

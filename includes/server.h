@@ -19,7 +19,7 @@ typedef enum{
 
 typedef struct{
     int maxNumeroFile;
-    long maxDimbyte;
+    size_t maxDimbyte;
     int numThreadsWorker;
     char sockname[UNIX_PATH_MAX];
     server_mode stato;
@@ -32,7 +32,7 @@ typedef struct{
 }clientConnessi;
 
 typedef struct{
-    long dimByte;
+    size_t dimByte;
     int scrittoriAttivi;
     int lettoriAttivi;
     char* path;
@@ -49,9 +49,9 @@ typedef struct{
     icl_hash_t* storage;
     int numeroFile;
     pthread_mutex_t mtx;
-    long dimBytes;
+    size_t dimBytes;
     int maxFile;
-    long maxDimBytes;
+    size_t maxDimBytes;
     int nReplacement;
 }t_file_storage;
 
@@ -72,7 +72,7 @@ extern t_log* logStr;
 
 void liberaFile (void* val);
 int modificaNumClientConnessi(int incr);
-int espelliFile(t_file* notToRemove, int myid);
+int espelliFile(t_file* notToRemove, int myid, t_coda* filesDaEspellere);
 
 int startRead(t_file* file);
 int doneRead(t_file* file);

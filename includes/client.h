@@ -12,6 +12,7 @@ typedef enum{
     WriteFile,
     ReadFile,
     WhereToSave,
+    WhereToBackup,
     ReadNFiles,
     DeleteFile
 }tipoOperazione;
