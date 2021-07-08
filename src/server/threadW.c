@@ -8,6 +8,7 @@ static int CloseFile(int fd_client, int myid);
 static int AppendToFile(int fd_client, int myid);
 static int CloseConnection(int fd_client, int myid);
 static int ReadNFile(int fd_client, int myid);
+static int inviaEspulsiAlClient(int fd_client,int myid, t_coda* filesDaEspellere);
 
 void funcW(void* arg){
     threadW_args* args= (threadW_args*) arg;
@@ -79,12 +80,6 @@ void funcW(void* arg){
                         }
                     }
                 }
-                else{
-                    int r=0;
-                    if(writen(fd_client,&r,sizeof(int))==-1){//invio operazione completata!
-                        perror("writen");
-                    }
-                }
                 break;
             case ap:
                 if(AppendToFile(fd_client, myid)==-1){
@@ -96,12 +91,6 @@ void funcW(void* arg){
                         if(CloseConnection(fd_client, myid)==-1){
                             perror("CloseConnection");
                         }
-                    }
-                }
-                else{
-                    int r=0;
-                    if(writen(fd_client,&r,sizeof(int))==-1){//invio operazione completata!
-                        perror("writen");
                     }
                 }
                 break;
@@ -370,7 +359,7 @@ static int OpenFile(int fd_client, int myid){
         }
         //ho raggiunto il numero massimo di file memorizzabili?
         if(file_storage->numeroFile==config.maxNumeroFile){ 
-            if(espelliFile(file,myid)==-1){//se si espelli un file
+            if(espelliFile(file,myid,NULL)==-1){//se si espelli un file
                 errno=EPROTO;
                 free(buffer);
                 UNLOCK_RETURN(&(file_storage->mtx),-1);
@@ -466,6 +455,7 @@ static int WriteFile(int fd_client, int myid){
     void* buffer;
     int nread;
     //leggo lunghezza path
+    
     if((nread=readn(fd_client,&len,sizeof(int)))==-1){
         return -1; //setta errno
     }
@@ -509,6 +499,7 @@ static int WriteFile(int fd_client, int myid){
         return -1;
     }
     int r=0; 
+    
     if(writen(fd_client,&r,sizeof(int))==-1){//comunico al client che può inviare il file
         SYSCALLRETURN(doneWrite(file),-1);
         UNLOCK_RETURN(&(file_storage->mtx),-1);
@@ -549,16 +540,22 @@ static int WriteFile(int fd_client, int myid){
             return -1;
         }
     }
+
     if(size>config.maxDimbyte){ //il file è troppo grande
         errno=EFBIG;
         free(buffer);
         SYSCALLRETURN(doneWrite(file),-1);
         UNLOCK_RETURN(&(file_storage->mtx),-1);
+        fprintf(stderr,"%ld\n",size);
         return -1;
     }
     //il file potrebbe entrare nel file storage
+    t_coda* filesDaEspellere=inizializzaCoda(NULL);
+    if(filesDaEspellere==NULL){
+        fprintf(stderr,"Errore inizializzazione coda di file da espellere: i file espulsi non verranno inviati al client");
+    }
     while(file_storage->dimBytes+size>config.maxDimbyte){//il file entra nel nostro storage o dobbiamo eliminare qualche file secondo la politica adottata?
-        if(espelliFile(file,myid)==-1){
+        if(espelliFile(file,myid,filesDaEspellere)==-1){
             errno=EPROTO;
             free(buffer);
             SYSCALLRETURN(doneWrite(file),-1);
@@ -584,6 +581,16 @@ static int WriteFile(int fd_client, int myid){
     free(buffer);
     SYSCALLRETURN(doneWrite(file),-1);
     scriviSuFileLog(logStr,"Thread %d: scrittura del file %s su richiesta del client %d. %d bytes sono stati scritti sul file.\n\n",myid,file->path,fd_client,size);
+    //comunico al client che fino a questo momento l'operazione è andata a buon fine
+    int t=0;
+    if(writen(fd_client,&t,sizeof(int))==-1){
+        distruggiCoda(filesDaEspellere,liberaFile);
+        return -1;
+    }
+    //invio file espulsi al client
+    if(inviaEspulsiAlClient(fd_client,myid,filesDaEspellere)==-1){
+        return -1;
+    }
     return 0;
 }
 
@@ -787,8 +794,12 @@ static int AppendToFile(int fd_client, int myid){
         return -1;
     }
     //il file potrebbe entrare nel fileStorage
+    t_coda* filesDaEspellere=inizializzaCoda(NULL);
+    if(filesDaEspellere==NULL){
+        fprintf(stderr,"Errore inizializzazione coda di file da espellere: i file espulsi non verranno inviati al client");
+    }
     while(file_storage->dimBytes + size >config.maxDimbyte){ //dobbiamo eliminare qualche file?
-        if(espelliFile(file,myid)==-1){
+        if(espelliFile(file,myid,filesDaEspellere)==-1){
             errno=EPROTO;
             free(buffer);
             SYSCALLRETURN(doneWrite(file),-1);
@@ -827,6 +838,16 @@ static int AppendToFile(int fd_client, int myid){
     free(buffer);
     SYSCALLRETURN(doneWrite(file),-1);
     scriviSuFileLog(logStr,"Thread %d: scrittura in append sul file %s su richiesta del client %d. %d bytes sono stati appesi al file.\n\n",myid,file->path,fd_client,size);
+    int t=0;
+    //comunico al client che l'oprazione è andata a buon fine
+    if(writen(fd_client,&t,sizeof(int))==-1){
+        distruggiCoda(filesDaEspellere,liberaFile);
+        return -1;
+    }
+    //invio file espulsi al client
+    if(inviaEspulsiAlClient(fd_client,myid,filesDaEspellere)==-1){
+        return -1;
+    }
     return 0;
 }
 //chiude la connessione con il client: rimuove fd_client da lista client connessi e fd_client dalla lista di ogni file
@@ -867,7 +888,7 @@ static int CloseConnection(int fd_client, int myid){
         perror("Close");
     }
     scriviSuFileLog(logStr,"Thread %d: chiusura connessione con client %d\n\n",myid,fd_client);
-    printf("Connessione terminata\n");
+    //printf("Connessione terminata\n");
     return 0;
 }
 static int ReadNFile(int fd_client, int myid){
@@ -913,7 +934,13 @@ static int ReadNFile(int fd_client, int myid){
             break;
     }
     UNLOCK_RETURN(&(file_storage->mtx),-1);//posso rilasciare lock globale
-
+    
+    //comunico al client che fino a questo momento l'operazione è andata a buon fine
+    int t=0;
+    if(writen(fd_client,&t,sizeof(int))==-1){
+        distruggiCoda(fileDaInviare,NULL);
+        return -1;
+    }
     //comunico al client il numero di file letti con successo
     if(writen(fd_client,&c,sizeof(int))==-1){
         distruggiCoda(fileDaInviare,NULL);
@@ -956,5 +983,47 @@ static int ReadNFile(int fd_client, int myid){
     }
     distruggiCoda(fileDaInviare,NULL);
     scriviSuFileLog(logStr,"Thread %d: lettura %d file su richiesta del client %d. %d byte sono stati inviati al client.\n\n",myid,c,fd_client,sizetot);
+    return 0;
+}
+static int inviaEspulsiAlClient(int fd_client,int myid, t_coda* filesDaEspellere){
+    //devo inviare i file espulsi al client
+    if(filesDaEspellere!=NULL){
+    //comunico al client il numero di file espulsi 
+        if(writen(fd_client,&(filesDaEspellere->size),sizeof(int))==-1){
+            distruggiCoda(filesDaEspellere,liberaFile);
+            return -1;
+        }
+        nodo* p=prelevaDaCoda(filesDaEspellere);
+        while(p!=NULL){
+            t_file* fileToSend=(t_file*) p->val;
+            //secondo il protocollo di comunicazione invio lunghezza path e path del file espulso
+            int len=strlen(fileToSend->path)+1;
+            if(writen(fd_client, &len,sizeof(int))==-1){
+                distruggiCoda(filesDaEspellere,liberaFile);
+                return -1;
+            }
+            //invio contenuto path
+            if(writen(fd_client,(void*)fileToSend->path,len)==-1){
+                distruggiCoda(filesDaEspellere,liberaFile);
+                return -1;
+            }
+            //secondo il protocollo di comunicazione invio dimensione file e contenuto file espulso
+            if(writen(fd_client, &(fileToSend->dimByte),sizeof(size_t))==-1){
+                distruggiCoda(filesDaEspellere,liberaFile);
+                return -1;
+            }
+            if(fileToSend->dimByte>0){//se il file non è vuoto invio contenuto
+                if(writen(fd_client, fileToSend->contenuto, fileToSend->dimByte)==-1){
+                    distruggiCoda(filesDaEspellere,liberaFile);
+                    return -1;
+                }
+            }
+            scriviSuFileLog(logStr,"Thread %d: invio file espulso %s al client %d\n\n",myid,fileToSend->path,fd_client);
+            liberaFile(fileToSend);
+            free(p);
+            p=prelevaDaCoda(filesDaEspellere);
+        }
+        distruggiCoda(filesDaEspellere,liberaFile);
+    }
     return 0;
 }

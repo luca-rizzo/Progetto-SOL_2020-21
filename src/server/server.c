@@ -166,7 +166,7 @@ int main(int argc,char** argv){
                         perror("accept");
                         return -1;
                     }
-                    fprintf(stdout,"Connessione accettata\n");
+                    //fprintf(stdout,"Connessione accettata\n");
                     if(aggiungiConnessione(fd_client)==-1){
                         fprintf(stderr,"Errore nell'aggiungere la connessione con client %d\n",fd_client);
                         perror("aggiungiConnessione");
@@ -245,18 +245,21 @@ int main(int argc,char** argv){
         fprintf(stderr,"Errore nella cancellazione del threads pool\n");
     }
     stampaInformazioni();
+
     //chiudo tutte le connessioni attive e libero memoria allocata da clientAttivi
     if(chiudiTutteConnessioni()==-1){
         fprintf(stderr,"Errore nella chiusura delle connessioni con i client\n");
         perror("chiudiTutteConnessioni");
         return -1;
     }
+
     //libero il file storage
     if(icl_hash_destroy(file_storage->storage,free,liberaFile)==-1){
         fprintf(stderr,"Errore nella distruzione struttura hash file storage\n");
     }
     pthread_mutex_destroy(&(file_storage->mtx));
     free(file_storage);
+
     //libero logStr
     if(distruggiStrutturaLog(logStr)==-1){
         fprintf(stderr,"Errore nella distruzione struttura dati log\n");
@@ -265,11 +268,10 @@ int main(int argc,char** argv){
     //chiudo pipe usata per far comunicare workers e thread dispatcher
     close(readyDescr[0]);
     close(readyDescr[1]);
-    //
+    //se ho teminato con SIGINT o SIGQUIT chiudo il descrittore aperto sul listen socket
     if(fd_skt!=-1){
         close(fd_skt);
     }
-    unlink(SOCKNAME);
     return 0;
 }
 
@@ -377,7 +379,7 @@ static int ottieniConfigServer(char* pathConfig){
             if(token==NULL){
                 return -1;
             }
-            if(isNumber(token,&(config.maxDimbyte))!=0){
+            if(isNumber(token,(long*) &(config.maxDimbyte))!=0){
                 fprintf(stdout,"max_storage deve essere seguito da un intero che specifica la capacità massima del server\n");
                 return -1;
             }

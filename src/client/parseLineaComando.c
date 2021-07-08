@@ -17,7 +17,7 @@ int ottieniRichieste(config_client* config, t_coda* richieste, int argc, char** 
         printf("Usage: ./client arg");
         return -1;
     }
-    while(prev_ind = optind, (opt =  getopt(argc, argv, ":f:W:w:r:d:R:t:c:ph")) != EOF){
+    while(prev_ind = optind, (opt =  getopt(argc, argv, ":D:f:W:w:r:d:R:t:c:ph")) != EOF){
         if ( optind == prev_ind + 2 && *optarg == '-' ) { //il comando richiedeva un parametro perchè optarg!=NULL
             optopt=opt;
             opt = ':';
@@ -122,7 +122,7 @@ int ottieniRichieste(config_client* config, t_coda* richieste, int argc, char** 
                 req->n=0;
                 req->path=NULL;
                 if(aggiungiInCoda(richieste,(void*) req)==-1){
-                    fprintf(stderr,"Errore aggiunta richiesta di lettura file %s\n",req->path);
+                    fprintf(stderr,"Errore aggiunta richiesta di salvataggio file letti in directory %s \n",req->pathToSave);
                 }
                 break;
             case 't':
@@ -143,7 +143,7 @@ int ottieniRichieste(config_client* config, t_coda* richieste, int argc, char** 
                     req->n=0;
                     req->pathToSave=NULL;
                     if(aggiungiInCoda(richieste,(void*) req)==-1){
-                        fprintf(stderr,"Errore aggiunta richiesta di lettura file %s\n",req->path);
+                        fprintf(stderr,"Errore aggiunta richiesta di rimozione file %s\n",req->path);
                     }
                     token = strtok_r(NULL, ",", &tmpstr);
                 }
@@ -155,6 +155,19 @@ int ottieniRichieste(config_client* config, t_coda* richieste, int argc, char** 
                 }
                 config->stampaStOut=1;
                 flag_p=1;
+                break;
+            case 'D':
+                NULLSYSCALL(req,(richiesta*)malloc(sizeof(richiesta)),"malloc");
+                req->op = WhereToBackup; 
+                if((req->pathToSave=realpath(optarg,NULL))==NULL){
+                    perror("Errore nel convertire path locale in globale");
+                    return -1;
+                }
+                req->n=0;
+                req->path=NULL;
+                if(aggiungiInCoda(richieste,(void*) req)==-1){
+                    fprintf(stderr,"Errore aggiunta richiesta di backup file espulsi nella directory %s\n",req->pathToSave);
+                }
                 break;
             case '?': 
                 printf("%c : Opzione non suportata\n", optopt);
@@ -183,30 +196,40 @@ int ottieniRichieste(config_client* config, t_coda* richieste, int argc, char** 
 int validazioneRichieste(t_coda* richieste){
     nodo* tmp=richieste->head;
     while(tmp!=NULL){
-        if(((richiesta*)tmp->val)->op==WhereToSave){ //la richiesta di prima deve essere stata una -r o una -R
-            if(tmp->previous!=NULL && (((richiesta*)tmp->previous->val)->op==ReadFile || ((richiesta*)tmp->previous->val)->op==ReadNFiles)){
+        richiesta* req = (richiesta*) tmp->val;
+        if(req->op==WhereToSave){
+            //la richiesta di prima deve essere stata una -r o una -R
+            if(tmp->previous!=NULL && (((richiesta*)(tmp->previous->val))->op==ReadFile || ((richiesta*)(tmp->previous->val))->op==ReadNFiles)){
                 nodo* tmp1=tmp->previous;
-                do{// setto il parametro dove salvare il file letto in tutte le richieste di lettura date da una -r
+                do{// setto il parametro dove salvare il file letto in tutte le richieste di lettura date da una -r o -R precedenti a opzione -d
                     NULLSYSCALL(((richiesta*)tmp1->val)->pathToSave,(void*)malloc(MAX_PATH_LENGTH),"malloc");
                     strncpy(((richiesta*)tmp1->val)->pathToSave, ((richiesta*)tmp->val)->pathToSave, MAX_PATH_LENGTH);
                     tmp1=tmp1->previous;
                 }while(tmp1!=NULL && (((richiesta*)tmp1->val)->op==ReadFile || ((richiesta*)tmp1->val)->op==ReadNFiles));
-                tmp->previous->next=tmp->next; //rimuovo il nodo -d perchè non è una richiesta da fare al server
-                if(tmp->next!=NULL)
-                    tmp->next->previous=tmp->previous;
-                free(((richiesta*)tmp->val)->pathToSave);
-                free(((richiesta*)tmp->val));
-                free(tmp);
-                break;
+                tmp=tmp->next;
             }
             else{
                 printf("L'opzione -d va usata subito dopo l'opzione -r o -R per specificare dove salvare i file richiesti\n");
                 return -1;
             }
         }
-        else{
-            tmp=tmp->next;
+        else if(req->op==WhereToBackup){
+            if(tmp->previous!=NULL && ((richiesta*)(tmp->previous->val))->op==WriteFile){
+                nodo* tmp1=tmp->previous;
+                do{// setto il parametro dove salvare il file espulso in tutte le richieste di scrittura date da -w o -W precedenti a opzione -D
+                    NULLSYSCALL(((richiesta*)tmp1->val)->pathToSave,(void*)malloc(MAX_PATH_LENGTH),"malloc");
+                    strncpy(((richiesta*)tmp1->val)->pathToSave, ((richiesta*)tmp->val)->pathToSave, MAX_PATH_LENGTH);
+                    tmp1=tmp1->previous;
+                }while(tmp1!=NULL && (((richiesta*)tmp1->val)->op==WriteFile));
+                tmp=tmp->next;
+            }
+            else{
+                printf("L'opzione -D va usata subito dopo l'opzione -w o -W per specificare dove salvare i file rimossi in seguito a capacity miss\n");
+                return -1;
+            }
         }
+        else    
+            tmp=tmp->next;
     }
     return 0;
 }

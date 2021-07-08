@@ -2,8 +2,10 @@
 #include<api.h>
 #include<conn.h>
 int fd_skt=-1;
+
 const char* socketname=NULL;
 static char* ottieniNomeDaPath(char* path);
+static int leggiNFileinDir(int n, const char* dirname, int fd_skt);
 static struct timespec difftimespec(struct timespec begin, struct timespec end);
 static int BThenA(struct timespec a,struct timespec b);
 //permette di aprire una connessione con il server tramite il socket file sockname
@@ -105,9 +107,13 @@ int openFile(const char* pathname,int flags){
     if(writen(fd_skt,&flags,sizeof(int))==-1){
         return -1;
     }
-    int res;
+    int res, nread;
     //leggo il risultato dell'operazione
-    if(readn(fd_skt,&res,sizeof(int))==-1){ 
+    if((nread=readn(fd_skt,&res,sizeof(int)))==-1){ 
+        return -1;
+    }
+    if(nread==0){
+        errno=EBADMSG;
         return -1;
     }
     if(res!=0){
@@ -140,17 +146,20 @@ int readFile(const char* pathname, void** buf, size_t* size){
         return -1;
     }
     //leggo il risultato dell'operazione
-    int res;
-    if(readn(fd_skt,&res,sizeof(int))==-1){ 
+    int res, nread;
+    if((nread=readn(fd_skt,&res,sizeof(int)))==-1){ 
         return -1;
     }
-    if(res!=0){
+    if(nread==0){
+        errno=EBADMSG;
+        return -1;
+    }
+    if(res!=0){ //c'è stato un errore?
         errno=res;
         return -1;
     } 
     //l'operazione è terminata correttamente
     size_t dim;
-    int nread;
     //leggo la dimensione del file
     if((nread=readn(fd_skt,&dim,sizeof(size_t)))==-1){ 
         return -1;
@@ -222,83 +231,81 @@ int writeFile(const char* pathname, const char* dirname){
         }
         return -1;
     }
+    if(fclose(ifp)!=0){ //chiudo il file
+        return -1;
+    }
     //abbiamo letto il contenuto del file in buffer; adesso lo mandiamo al server
     t_op operazione=wr;
     if(writen(fd_skt,&operazione,sizeof(t_op))==-1){//secondo il protocollo di comunicazione invio operazione da effettuare
         free(buffer);
-        if(fclose(ifp)!=0){
-            return -1;
-        }
         return -1; //errno settata da writen
     }
     //secondo il protocollo di comunicazione invio lunghezza path e path del file da scrivere
     int len=strlen(pathname)+1;
     if(writen(fd_skt,&len,sizeof(int))==-1){
         free(buffer);
-        if(fclose(ifp)!=0){
-            return -1;
-        }
         return -1;
     }
     if(writen(fd_skt,(void*)pathname,len)==-1){
         free(buffer);
-        if(fclose(ifp)!=0){
-            return -1;
-        }
         return -1;
-    } //posso inviare il file?
-    int res;
-    if(readn(fd_skt,&res,sizeof(int))==-1){ //leggo il risultato dell'operazione fino a questo punto
+    } 
+    //posso inviare il file?
+    int res, nread;
+    if((nread=readn(fd_skt,&res,sizeof(int)))==-1){ //leggo risultato operazione fino a questo punto
         free(buffer);
-        if(fclose(ifp)!=0){
-            return -1;
-        }
+        return -1;
+    }
+    if(nread==0){
+        free(buffer);
+        errno=EBADMSG;
         return -1;
     }
     if(res!=0){
         free(buffer);
-        if(fclose(ifp)!=0){
-            return -1;
-        }
         errno=res;
         return -1;
     } //posso inviare il file
+
     //secondo il protocollo di comunicazione invio dimensione file e contenuto
     if(writen(fd_skt,&size,sizeof(size_t))==-1){
         free(buffer);
-        if(fclose(ifp)!=0){
-            return -1;
-        }
         return -1;
     }
     //se il file non è vuoto invio contenuto
     if(size>0){
         if(writen(fd_skt, buffer, size)==-1){
             free(buffer);
-            if(fclose(ifp)!=0){
-                return -1;
-            }
-        return -1;
+            return -1;
         }
     }
     free(buffer);
-    if(readn(fd_skt,&res,sizeof(int))==-1){ //leggo il risultato dell'operazione
-        if(fclose(ifp)!=0){
-            return -1;
-        }
+    //leggo risultato operazione fino a questo punto
+    if((nread=readn(fd_skt,&res,sizeof(int)))==-1){ 
+        return -1;
+    }
+    if(nread==0){
+        errno=EBADMSG;
         return -1;
     }
     if(res!=0){
-        if(fclose(ifp)!=0){
-            return -1;
-        }
         errno=res;
         return -1;
     }
-    if(fclose(ifp)!=0){
+    //operazione completata correttamente->contenuto scritto sul file
+
+    //leggo numero file espulsi
+    if((nread=readn(fd_skt,&res,sizeof(int)))==-1){ 
         return -1;
     }
-    //l'operazione è terminata correttamente -> il file è stato scritto
+    if(nread==0){
+        errno=EBADMSG;
+        return -1;
+    }
+    //leggo file espulsi e li salvo in dirname
+    if(leggiNFileinDir(res,dirname,fd_skt)==-1){
+        return -1;
+    }
     return 0;
 }
 int removeFile(const char* pathname){
@@ -321,8 +328,12 @@ int removeFile(const char* pathname){
     if(writen(fd_skt,(void*)pathname,len)==-1){
         return -1;
     }
-    int res;
-    if(readn(fd_skt,&res,sizeof(int))==-1){ //leggo il risultato dell'operazione
+    int res, nread;
+    if((nread=readn(fd_skt,&res,sizeof(int)))==-1){ //leggo risultato operazione 
+        return -1;
+    }
+    if(nread==0){
+        errno=EBADMSG;
         return -1;
     }
     if(res!=0){
@@ -352,8 +363,12 @@ int closeFile(const char* pathname){
     if(writen(fd_skt,(void*)pathname,len)==-1){
         return -1;
     }
-    int res;
-    if(readn(fd_skt,&res,sizeof(int))==-1){ //leggo il risultato dell'operazione
+    int res, nread;
+    if((nread=readn(fd_skt,&res,sizeof(int)))==-1){ //leggo risultato operazione
+        return -1;
+    }
+    if(nread==0){
+        errno=EBADMSG;
         return -1;
     }
     if(res!=0){
@@ -384,8 +399,12 @@ int appendToFile(const char* pathname, void* buf, size_t size, const char* dirna
     if(writen(fd_skt,(void*)pathname,len)==-1){
         return -1;
     } //posso inviare il contenuto da aggiungere al file?
-    int res;
-    if(readn(fd_skt,&res,sizeof(int))==-1){ //leggo il risultato dell'operazione fino a questo punto
+    int res, nread;
+    if((nread=readn(fd_skt,&res,sizeof(int)))==-1){ //leggo risultato operazione fino a questo punto
+        return -1;
+    }
+    if(nread==0){
+        errno=EBADMSG;
         return -1;
     }
     if(res!=0){
@@ -393,7 +412,8 @@ int appendToFile(const char* pathname, void* buf, size_t size, const char* dirna
         return -1;
     } //posso inviare buf
 
-    //secondo il protocollo di comunicazione invio dimensione file e contenuto
+    //secondo il protocollo di comunicazione invio dimensione buf e buf
+
     //invio dimensione
     if(writen(fd_skt,&size,sizeof(size_t))==-1){
         return -1;
@@ -403,7 +423,11 @@ int appendToFile(const char* pathname, void* buf, size_t size, const char* dirna
         return -1;
     }
     //leggo il risultato dell'operazione
-    if(readn(fd_skt,&res,sizeof(int))==-1){ 
+    if((nread=readn(fd_skt,&res,sizeof(int)))==-1){ 
+        return -1;
+    }
+    if(nread==0){
+        errno=EBADMSG;
         return -1;
     }
     if(res!=0){
@@ -411,6 +435,19 @@ int appendToFile(const char* pathname, void* buf, size_t size, const char* dirna
         return -1;
     }
     //operazione terminata correttamente-> contenuto appeso al file
+
+    //leggo numero file espulsi
+    if((nread=readn(fd_skt,&res,sizeof(int)))==-1){ 
+        return -1;
+    }
+    if(nread==0){
+        errno=EBADMSG;
+        return -1;
+    }
+    //leggo file espulsi e li salvo in dirname
+    if(leggiNFileinDir(res,dirname,fd_skt)==-1){
+        return -1;
+    }
     return 0;    
 }
 int readNFiles(int N, const char* dirname){
@@ -426,21 +463,38 @@ int readNFiles(int N, const char* dirname){
         return -1; //errno settata da writen
     }
 
-    int res;
-    if(readn(fd_skt,&res,sizeof(int))==-1){ //leggo il risultato dell'operazione
+    int res, nread;
+    if((nread=readn(fd_skt,&res,sizeof(int)))==-1){ //leggo risultato operazione fino a questo punto
         return -1;
     }
-    if(res==-1){
+    if(nread==0){
+        errno=EBADMSG;
+        return -1;
+    }
+    if(res!=0){
         errno=res;
         return -1;
-    } 
-    //l'operazione è terminata correttamente: il server ha letto un numero di file pari a res
-    
+    }
+    //leggo numero file letti
+    if((nread=readn(fd_skt,&res,sizeof(int)))==-1){ 
+        return -1;
+    }
+    if(nread==0){
+        errno=EBADMSG;
+        return -1;
+    }
+    //l'operazione è terminata correttamente: il server ha letto un numero di file pari a res e li sta inviando
+    if(leggiNFileinDir(res, dirname,fd_skt)==-1){
+        return -1;
+    }
+    return res;
+}
+//permette di leggere n files inviati dal server e di memorizzarli nella cartella dirname
+static int leggiNFileinDir(int n, const char* dirname, int fd_skt){
     int len;  
     void* path;
     int nread;
-
-    for(int i=0;i<res;i++){
+    for(int i=0;i<n;i++){
         if((nread=readn(fd_skt,&len,sizeof(int)))==-1){ //secondo il protocollo di comunicazione leggo lunghezza path e path
             return -1; //setta errno
         }
@@ -463,7 +517,12 @@ int readNFiles(int N, const char* dirname){
         }
         //secondo il protocollo di comunicazione leggo dimensione file e contenuto
         size_t dim;
-        if(readn(fd_skt,&dim,sizeof(size_t))==-1){ //leggo la dimensione del file
+        if((nread=readn(fd_skt,&dim,sizeof(size_t)))==-1){ //leggo la dimensione del file
+            return -1;
+        }
+        if(nread==0){
+            free(path);
+            errno=EBADMSG;
             return -1;
         }
         void* buffer=NULL;
@@ -473,8 +532,15 @@ int readNFiles(int N, const char* dirname){
                 free(path);
                 return -1;
             }
-            if(readn(fd_skt,buffer,dim)==-1){ //leggo contenuto file
+            if((nread=readn(fd_skt,buffer,dim))==-1){ //leggo contenuto file
+                free(buffer);
                 free(path);
+                return -1;
+            }
+            if(nread==0){
+                free(buffer);
+                free(path);
+                errno=EBADMSG;
                 return -1;
             }
         }
@@ -486,13 +552,13 @@ int readNFiles(int N, const char* dirname){
         }
         if(scriviContenutoInDirectory(buffer,dim,path,(char*) dirname)==-1){
             fprintf(stderr,"Errore nella scrittura su disco del file %s\n", (char*) path);
-            perror("scriviContenutoInDirectory");
+            perror("scriviContenutoInDirectory"); //continuo comunque a salvare i file che posso salvare
         }
         free(path);
         if(buffer!=NULL)
             free(buffer);
     }
-    return res;
+    return 0;
 }
 //scrive il contenuto di buffer nella directory dirToSave in un file il cui nome è ottenuto da pathFile
 //ritorna 0 in caso di successo; -1 in caso di fallimento

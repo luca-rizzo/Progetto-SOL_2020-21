@@ -2,6 +2,7 @@
  * @file threadpool.c
  * @brief File di implementazione dell'interfaccia Threadpool
  */
+//implementazione threadpool fornita a lezione
 
 #include<server.h>
 

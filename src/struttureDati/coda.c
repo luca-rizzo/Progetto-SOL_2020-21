@@ -15,6 +15,7 @@ t_coda* inizializzaCoda(int (*cmp) (void*,void*)){
     }
     coda->head=NULL;
     coda->tail=NULL;
+    coda->size=0;
     if(cmp!=NULL)
         coda->cmp=cmp;
     else
@@ -41,6 +42,7 @@ int aggiungiInCoda(t_coda* coda,void* val){
         p->previous=coda->tail;
     }
     coda->tail=p;
+    coda->size++;
     return 0;
 }
 //ritorna il nodo in testa ala coda in caso di successo; NULL se la coda è vuota
@@ -53,6 +55,7 @@ nodo* prelevaDaCoda(t_coda* coda){
     if(coda->head==NULL){
         coda->tail=NULL;
     }
+    coda->size--;
     return p;
 }
 //ritorna 0 se distrugge correttamente la coda;-1 altrimenti
@@ -106,6 +109,7 @@ int rimuoviDaCoda(t_coda* coda, void* val, void (*liberaValoreNodo)(void*)){
             (*liberaValoreNodo)(p->val);
         }
         free(p);
+        coda->size--;
         return 0;
     }
     p=coda->head->next;
@@ -130,5 +134,6 @@ int rimuoviDaCoda(t_coda* coda, void* val, void (*liberaValoreNodo)(void*)){
         (*liberaValoreNodo)(p->val);
     }
     free(p);
+    coda->size--;
     return 0;
 }

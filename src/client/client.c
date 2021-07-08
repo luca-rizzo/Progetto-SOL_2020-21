@@ -24,6 +24,7 @@ int main(int argc,char** argv){
     if(r==1){ //ho stampato helpUsage()-> esco
         return 0;
     }
+    
     if(validazioneRichieste(richieste)==-1){
         fprintf(stderr,"Richieste mal formulate!\n");
         return -1;
@@ -36,8 +37,8 @@ int main(int argc,char** argv){
     }
     //ESEGUI RICHIESTE
     eseguiRichieste(richieste,config);   //in base alle richieste fa varie chiamate all'API implementata
-
-    //CHIUDI CONNESSIONE
+    //stampaRichieste(richieste);
+    // //CHIUDI CONNESSIONE
     if(closeConnection(config.socket)==-1){
         perror("closeConnection");
         return -1;
@@ -55,7 +56,7 @@ static void clean_up (){
 void stampaRichieste(t_coda* richieste){
     nodo* p=prelevaDaCoda(richieste);
     while(p!=NULL){
-        printf("%d, %s\n", ((richiesta*)p->val)->op, ((richiesta*)p->val)->path);
+        printf("%d, %s, %s\n", ((richiesta*)p->val)->op, ((richiesta*)p->val)->path, ((richiesta*)p->val)->pathToSave);
         p=prelevaDaCoda(richieste);
     }
 }

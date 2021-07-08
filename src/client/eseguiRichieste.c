@@ -16,18 +16,21 @@ int eseguiRichieste(t_coda* richieste, config_client config){
                     if(config.stampaStOut){
                         fprintf(stderr,"Tipo Operazione: Scrittura file \nFile di riferimento: %s\nEsito: Negativo\nMotivazione: ", r->path);
                         perror("API--openFile");
+                        fprintf(stderr,"\n");
                     }
                     break;
                 }
-                if((err=writeFile(r->path,NULL))==-1){
+                if((err=writeFile(r->path,r->pathToSave))==-1){
                     if(config.stampaStOut){
                         fprintf(stderr,"Tipo Operazione: Scrittura file \nFile di riferimento: %s\nEsito: Negativo\nMotivazione: ", r->path);
                         perror("API--writeFile");
+                        fprintf(stderr,"\n");
                     }
                 }//devo comunque chiudere il file
                 if(closeFile(r->path)==-1){
                     if(config.stampaStOut){
                         perror("API--closeFile");
+                        fprintf(stderr,"\n");
                     }
                     break;
                 }
@@ -39,6 +42,7 @@ int eseguiRichieste(t_coda* richieste, config_client config){
                     if(config.stampaStOut){
                         fprintf(stderr,"Tipo Operazione: Lettura file \nFile di riferimento: %s\nEsito: Negativo\nMotivazione: ", r->path);
                         perror("API--openFile");
+                        fprintf(stderr,"\n");
                     }
                     break;
                 }
@@ -46,11 +50,13 @@ int eseguiRichieste(t_coda* richieste, config_client config){
                     if(config.stampaStOut){
                         fprintf(stderr,"Tipo Operazione: Lettura file \nFile di riferimento: %s\nEsito: Negativo\nMotivazione: ", r->path);
                         perror("API--readFile");
+                        fprintf(stderr,"\n");
                     }
                 }//devo comunque chiudere il file
                 if(closeFile(r->path)==-1){
                     if(config.stampaStOut){
                         perror("API--closeFile");
+                        fprintf(stderr,"\n");
                     }
                     break;
                 }
@@ -80,6 +86,7 @@ int eseguiRichieste(t_coda* richieste, config_client config){
                     if(config.stampaStOut){
                         fprintf(stderr,"Tipo Operazione: Rimozione file \nFile di riferimento: %s\nEsito: Negativo\nMotivazione: ", r->path);
                         perror("API--openFile");
+                        fprintf(stderr,"\n");
                     }
                     break;
                 }
@@ -87,11 +94,13 @@ int eseguiRichieste(t_coda* richieste, config_client config){
                     if(config.stampaStOut){
                         fprintf(stderr,"Tipo Operazione: Rimozione file \nFile di riferimento: %s\nEsito: Negativo\nMotivazione: ", r->path);
                         perror("API--removeFile");
+                        fprintf(stderr,"\n");
                     }
                     //devo comunque chiudere il file perchè non lo ho eliminato correttamente
                     if(closeFile(r->path)==-1){
                         if(config.stampaStOut){
                             perror("API--closeFile");
+                            fprintf(stderr,"\n");
                         }
                     }
                     break;
@@ -105,6 +114,7 @@ int eseguiRichieste(t_coda* richieste, config_client config){
                     if(config.stampaStOut){
                         fprintf(stderr,"Tipo Operazione: Lettura N file \nEsito: Negativo\nMotivazione: ");
                         perror("API--readNFiles");
+                        fprintf(stderr,"\n");
                     }
                 }
                 else{
