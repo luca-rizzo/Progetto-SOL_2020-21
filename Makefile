@@ -99,7 +99,7 @@ cleanTest1:
 
 cleanTest2: 
 		rm -f -r test/test2/fileLetti/*/*
-		rm -f -r test/test2/backupFile
+		rm -f -r test/test2/backupFile/*
 
 
 
