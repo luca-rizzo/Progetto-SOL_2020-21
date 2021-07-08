@@ -9,6 +9,7 @@ static int AppendToFile(int fd_client, int myid);
 static int CloseConnection(int fd_client, int myid);
 static int ReadNFile(int fd_client, int myid);
 static int inviaEspulsiAlClient(int fd_client,int myid, t_coda* filesDaEspellere);
+static int unlockAllfile(t_coda* files);
 
 void funcW(void* arg){
     threadW_args* args= (threadW_args*) arg;
@@ -954,24 +955,28 @@ static int ReadNFile(int fd_client, int myid){
         int len=strlen(file->path)+1;
         if(writen(fd_client, &len,sizeof(int))==-1){
             SYSCALLRETURN(doneRead(file),-1);
+            unlockAllfile(fileDaInviare); //rilascio la lock su tutti i file lockati
             distruggiCoda(fileDaInviare,NULL);
             return -1;
         }
         //invio contenuto path
         if(writen(fd_client,(void*)file->path,len)==-1){
             SYSCALLRETURN(doneRead(file),-1);
+            unlockAllfile(fileDaInviare); //rilascio la lock su tutti i file lockati
             distruggiCoda(fileDaInviare,NULL);
             return -1;
         }
         //secondo il protocollo di comunicazione invio dimensione file e contenuto file da scrivere
         if(writen(fd_client, &(file->dimByte),sizeof(size_t))==-1){
             SYSCALLRETURN(doneRead(file),-1);
+            unlockAllfile(fileDaInviare); //rilascio la lock su tutti i file lockati
             distruggiCoda(fileDaInviare,NULL);
             return -1;
         }
         if(file->dimByte>0){//se il file non è vuoto invio contenuto
             if(writen(fd_client, file->contenuto, file->dimByte)==-1){
                 SYSCALLRETURN(doneRead(file),-1);
+                unlockAllfile(fileDaInviare); //rilascio la lock su tutti i file lockati
                 distruggiCoda(fileDaInviare,NULL);
                 return -1;
             }
@@ -1024,6 +1029,15 @@ static int inviaEspulsiAlClient(int fd_client,int myid, t_coda* filesDaEspellere
             p=prelevaDaCoda(filesDaEspellere);
         }
         distruggiCoda(filesDaEspellere,liberaFile);
+    }
+    return 0;
+}
+static int unlockAllfile(t_coda* files){
+    nodo* p=prelevaDaCoda(files);
+    while(p!=NULL){
+        t_file* file = (t_file*) p->val;
+        SYSCALLRETURN(doneRead(file),-1);
+        p=prelevaDaCoda(files);
     }
     return 0;
 }
