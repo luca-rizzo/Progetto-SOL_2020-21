@@ -26,8 +26,13 @@ int espelliFile(t_file* notToRemove, int myid, t_coda* filesDaEspellere){
         liberaFile(fileDaEspellere);
         return 0;
     }
-    if(aggiungiInCoda(filesDaEspellere, fileDaEspellere)==-1){
-        return -1;
+    if((fileDaEspellere->ultima_operazione_mod)==wr || (fileDaEspellere->ultima_operazione_mod)==ap){ //il file deve essere stato aperto e modificato
+        if(aggiungiInCoda(filesDaEspellere, fileDaEspellere)==-1){
+            return -1;
+        }
+    }
+    else{
+        liberaFile(fileDaEspellere);
     }
     return 0;
 }

@@ -39,7 +39,7 @@ typedef struct{
     void* contenuto;
     t_coda* fd;//insieme di fd che hanno aperto il file
     struct timespec tempoCreazione;
-    t_op ultima_operazione;
+    t_op ultima_operazione_mod;
     pthread_mutex_t mtx;
     pthread_mutex_t ordering;
     pthread_cond_t cond_Go;

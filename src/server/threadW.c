@@ -276,7 +276,7 @@ static int OpenFile(int fd_client, int myid){
                 free(buffer);
                 return -1;
             } 
-            file->ultima_operazione=op;
+            
             if(doneWrite(file)==-1){
                 free(buffer);
                 return -1;
@@ -347,7 +347,7 @@ static int OpenFile(int fd_client, int myid){
             UNLOCK_RETURN(&(file_storage->mtx),-1);
 	        return -1;
         } 
-        file->ultima_operazione=cr;
+        file->ultima_operazione_mod=cr;
         if ((pthread_mutex_init(&(file->mtx), NULL) != 0) || (pthread_mutex_init(&(file->ordering), NULL) != 0) || (pthread_cond_init(&(file->cond_Go), NULL) != 0))  {
             errno=EPROTO;
             free(buffer);
@@ -486,7 +486,7 @@ static int WriteFile(int fd_client, int myid){
     }
     free(buffer);
     SYSCALLRETURN(startWrite(file),-1);
-    if(file->ultima_operazione!=cr){ //l'ultima operazione deve essere stata la creazione del file
+    if(file->ultima_operazione_mod!=cr){ //l'ultima operazione deve essere stata la creazione del file
         errno=EACCES;
         SYSCALLRETURN(doneWrite(file),-1);
         UNLOCK_RETURN(&(file_storage->mtx),-1);
@@ -576,7 +576,7 @@ static int WriteFile(int fd_client, int myid){
         return -1;
     }
     memcpy(file->contenuto,buffer,size);
-    file->ultima_operazione=wr;
+    file->ultima_operazione_mod=wr;
     file->dimByte=size;
     free(buffer);
     SYSCALLRETURN(doneWrite(file),-1);
@@ -834,7 +834,7 @@ static int AppendToFile(int fd_client, int myid){
         memcpy(((char *)(file->contenuto) + file->dimByte),buffer,size);
     }
     file->dimByte=newDim;
-    file->ultima_operazione=ap;
+    file->ultima_operazione_mod=ap;
     free(buffer);
     SYSCALLRETURN(doneWrite(file),-1);
     scriviSuFileLog(logStr,"Thread %d: scrittura in append sul file %s su richiesta del client %d. %d bytes sono stati appesi al file.\n\n",myid,file->path,fd_client,size);
