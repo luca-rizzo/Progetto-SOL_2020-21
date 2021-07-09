@@ -266,7 +266,7 @@ static int OpenFile(int fd_client, int myid){
             }
             *val= fd_client;
             if(isInCoda(file->fd, &fd_client)){//l'utente ha già aperto il file?
-                errno=EIO;
+                errno=EPROTO;
                 doneWrite(file);
                 free(buffer);
                 return -1;
@@ -436,12 +436,14 @@ static int ReadFile(int fd_client, int myid){
     buffer = file->contenuto;
     if(writen(fd_client,&dim,sizeof(size_t))==-1){
         perror("writen");
+        errno=EBADMSG;
         doneRead(file);
         return -1;
     }
     if(dim!=0){ // se il file non è vuoto invio contenuto
         if(writen(fd_client,buffer,dim)==-1){
             perror("writen");
+            errno=EBADMSG;
             doneRead(file);
             return -1;
         }
@@ -547,7 +549,6 @@ static int WriteFile(int fd_client, int myid){
         free(buffer);
         SYSCALLRETURN(doneWrite(file),-1);
         UNLOCK_RETURN(&(file_storage->mtx),-1);
-        fprintf(stderr,"%ld\n",size);
         return -1;
     }
     //il file potrebbe entrare nel file storage
@@ -590,6 +591,8 @@ static int WriteFile(int fd_client, int myid){
     }
     //invio file espulsi al client
     if(inviaEspulsiAlClient(fd_client,myid,filesDaEspellere)==-1){
+        distruggiCoda(filesDaEspellere,liberaFile);
+        errno=EBADMSG;
         return -1;
     }
     return 0;
@@ -847,6 +850,8 @@ static int AppendToFile(int fd_client, int myid){
     }
     //invio file espulsi al client
     if(inviaEspulsiAlClient(fd_client,myid,filesDaEspellere)==-1){
+        distruggiCoda(filesDaEspellere,liberaFile);
+        errno=EBADMSG;
         return -1;
     }
     return 0;
@@ -878,7 +883,6 @@ static int CloseConnection(int fd_client, int myid){
     }
     UNLOCK_RETURN(&(file_storage->mtx),-1);
     LOCK_RETURN(&(clientAttivi->mtx),-1);
-    clientAttivi->nclient--;
     if(rimuoviDaCoda(clientAttivi->client,&fd_client,free)==-1){
         UNLOCK_RETURN(&(clientAttivi->mtx),-1);
         errno=EPROTO; //errore di protocollo interno
@@ -907,9 +911,8 @@ static int ReadNFile(int fd_client, int myid){
     else{
         numFileDaInviare= MIN(file_storage->numeroFile,n);
     }
-    int c=0;
-    t_coda* fileDaInviare=inizializzaCoda(NULL);
-    if(fileDaInviare==NULL){
+    t_coda* filesDaInviare=inizializzaCoda(NULL);
+    if(filesDaInviare==NULL){
         UNLOCK_RETURN(&(file_storage->mtx),-1);
         errno=EPROTO;
         return -1;
@@ -922,16 +925,15 @@ static int ReadNFile(int fd_client, int myid){
         for (curr=bucket; curr!=NULL; ) {
             file=(t_file*) curr->data;
             SYSCALLRETURN(startRead(file),-1); //blocco il file in lettura: evito che qualcuno possa cancellarlo o scriverlo
-            if(aggiungiInCoda(fileDaInviare,(void*)file)==-1){ //continuo ad andare avanti
+            if(aggiungiInCoda(filesDaInviare,(void*)file)==-1){ //continuo ad andare avanti
                 curr=curr->next;
                 continue;
             }
-            c++;
-            if(c==numFileDaInviare)
+            if(filesDaInviare->size==numFileDaInviare)
                 break;
             curr=curr->next;
         }
-        if(c==numFileDaInviare)
+        if(filesDaInviare->size==numFileDaInviare)
             break;
     }
     UNLOCK_RETURN(&(file_storage->mtx),-1);//posso rilasciare lock globale
@@ -939,97 +941,97 @@ static int ReadNFile(int fd_client, int myid){
     //comunico al client che fino a questo momento l'operazione è andata a buon fine
     int t=0;
     if(writen(fd_client,&t,sizeof(int))==-1){
-        distruggiCoda(fileDaInviare,NULL);
+        distruggiCoda(filesDaInviare,NULL);
+        return -1;
+    }
+    if(inviaLettiAlClient(fd_client,myid,filesDaInviare)==-1){
+        unlockAllfile(filesLetti); //rilascio la lock su tutti i file lockati
+        distruggiCoda(filesLetti,NULL); //distruggo la coda ma non i file
+        errno=EBADMSG;
+        return -1;
+    }   
+}
+static int inviaEspulsiAlClient(int fd_client,int myid, t_coda* filesDaEspellere){
+    //devo inviare i file espulsi al client
+    if(filesDaEspellere==NULL){
+        return -1;
+    }
+    //comunico al client il numero di file espulsi 
+    if(writen(fd_client,&(filesDaEspellere->size),sizeof(int))==-1){
+        return -1;
+    }
+    nodo* p=prelevaDaCoda(filesDaEspellere);
+    while(p!=NULL){
+        t_file* fileToSend=(t_file*) p->val;
+        //secondo il protocollo di comunicazione invio lunghezza path e path del file espulso
+        int len=strlen(fileToSend->path)+1;
+        if(writen(fd_client, &len,sizeof(int))==-1){
+            return -1;
+        }
+        //invio contenuto path
+        if(writen(fd_client,(void*)fileToSend->path,len)==-1){
+            return -1;
+        }
+        //secondo il protocollo di comunicazione invio dimensione file e contenuto file espulso
+        if(writen(fd_client, &(fileToSend->dimByte),sizeof(size_t))==-1){
+            return -1;
+        }
+        if(fileToSend->dimByte>0){//se il file non è vuoto invio contenuto
+            if(writen(fd_client, fileToSend->contenuto, fileToSend->dimByte)==-1){
+                return -1;
+            }
+        }
+        scriviSuFileLog(logStr,"Thread %d: invio file espulso %s al client %d\n\n",myid,fileToSend->path,fd_client);
+        liberaFile(fileToSend);
+        free(p);
+        p=prelevaDaCoda(filesDaEspellere);
+    }
+    distruggiCoda(filesDaEspellere,liberaFile);
+    return 0;
+}
+//permette di inviare al client la coda di file filesLetti; ritorna 0 in caso di successo, -1 in caso di fallimento
+static int inviaLettiAlClient(int fd_client,int myid, t_coda* filesLetti){
+    if(filesLetti==NULL){
         return -1;
     }
     //comunico al client il numero di file letti con successo
-    if(writen(fd_client,&c,sizeof(int))==-1){
-        distruggiCoda(fileDaInviare,NULL);
+    if(writen(fd_client,&(filesLetti->size),sizeof(int))==-1){
         return -1;
     }
     int sizetot=0;
-    nodo* p=prelevaDaCoda(fileDaInviare);
+    int numfile=filesLetti->size;
+    nodo* p=prelevaDaCoda(filesLetti);
     while(p!=NULL){
         t_file* file=(t_file*) p->val;
         //secondo il protocollo di comunicazione invio lunghezza path e path del file da scrivere
         int len=strlen(file->path)+1;
         if(writen(fd_client, &len,sizeof(int))==-1){
             SYSCALLRETURN(doneRead(file),-1);
-            unlockAllfile(fileDaInviare); //rilascio la lock su tutti i file lockati
-            distruggiCoda(fileDaInviare,NULL);
             return -1;
         }
         //invio contenuto path
         if(writen(fd_client,(void*)file->path,len)==-1){
             SYSCALLRETURN(doneRead(file),-1);
-            unlockAllfile(fileDaInviare); //rilascio la lock su tutti i file lockati
-            distruggiCoda(fileDaInviare,NULL);
             return -1;
         }
         //secondo il protocollo di comunicazione invio dimensione file e contenuto file da scrivere
         if(writen(fd_client, &(file->dimByte),sizeof(size_t))==-1){
             SYSCALLRETURN(doneRead(file),-1);
-            unlockAllfile(fileDaInviare); //rilascio la lock su tutti i file lockati
-            distruggiCoda(fileDaInviare,NULL);
             return -1;
         }
         if(file->dimByte>0){//se il file non è vuoto invio contenuto
             if(writen(fd_client, file->contenuto, file->dimByte)==-1){
                 SYSCALLRETURN(doneRead(file),-1);
-                unlockAllfile(fileDaInviare); //rilascio la lock su tutti i file lockati
-                distruggiCoda(fileDaInviare,NULL);
                 return -1;
             }
         }
         sizetot+=file->dimByte;
         free(p); //non devo liberare il file ma solo il nodo!
-        p=prelevaDaCoda(fileDaInviare);
+        p=prelevaDaCoda(filesLetti);
         SYSCALLRETURN(doneRead(file),-1);
     }
-    distruggiCoda(fileDaInviare,NULL);
-    scriviSuFileLog(logStr,"Thread %d: lettura %d file su richiesta del client %d. %d byte sono stati inviati al client.\n\n",myid,c,fd_client,sizetot);
-    return 0;
-}
-static int inviaEspulsiAlClient(int fd_client,int myid, t_coda* filesDaEspellere){
-    //devo inviare i file espulsi al client
-    if(filesDaEspellere!=NULL){
-    //comunico al client il numero di file espulsi 
-        if(writen(fd_client,&(filesDaEspellere->size),sizeof(int))==-1){
-            distruggiCoda(filesDaEspellere,liberaFile);
-            return -1;
-        }
-        nodo* p=prelevaDaCoda(filesDaEspellere);
-        while(p!=NULL){
-            t_file* fileToSend=(t_file*) p->val;
-            //secondo il protocollo di comunicazione invio lunghezza path e path del file espulso
-            int len=strlen(fileToSend->path)+1;
-            if(writen(fd_client, &len,sizeof(int))==-1){
-                distruggiCoda(filesDaEspellere,liberaFile);
-                return -1;
-            }
-            //invio contenuto path
-            if(writen(fd_client,(void*)fileToSend->path,len)==-1){
-                distruggiCoda(filesDaEspellere,liberaFile);
-                return -1;
-            }
-            //secondo il protocollo di comunicazione invio dimensione file e contenuto file espulso
-            if(writen(fd_client, &(fileToSend->dimByte),sizeof(size_t))==-1){
-                distruggiCoda(filesDaEspellere,liberaFile);
-                return -1;
-            }
-            if(fileToSend->dimByte>0){//se il file non è vuoto invio contenuto
-                if(writen(fd_client, fileToSend->contenuto, fileToSend->dimByte)==-1){
-                    distruggiCoda(filesDaEspellere,liberaFile);
-                    return -1;
-                }
-            }
-            scriviSuFileLog(logStr,"Thread %d: invio file espulso %s al client %d\n\n",myid,fileToSend->path,fd_client);
-            liberaFile(fileToSend);
-            free(p);
-            p=prelevaDaCoda(filesDaEspellere);
-        }
-        distruggiCoda(filesDaEspellere,liberaFile);
-    }
+    distruggiCoda(filesLetti,NULL);
+    scriviSuFileLog(logStr,"Thread %d: lettura %d file su richiesta del client %d. %d byte sono stati inviati al client.\n\n",myid,numfile,fd_client,sizetot);
     return 0;
 }
 static int unlockAllfile(t_coda* files){
