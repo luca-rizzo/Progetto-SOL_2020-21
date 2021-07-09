@@ -3,6 +3,7 @@
 int isDirectory(char* file);
 void printfUsage();
 int scanDirectory(char* directory, t_coda* richieste,int n);
+char* myrealpath(char* path);
 
 //parsa tutta la linea di comando per ottenere richieste del client;
 //ritorna -1 in caso di errore; 1 se ho digitato flag -h; 0 se lo scan delle richieste è andato a buon fine
@@ -33,8 +34,8 @@ int ottieniRichieste(config_client* config, t_coda* richieste, int argc, char** 
                     printf("Il flag -f può essere usato una sola volta\n");
                     return -1;
                 }
-                NULLSYSCALL(config->socket,(void*)malloc(MAX_PATH_LENGTH),"malloc");
-                strncpy(config->socket,optarg,MAX_PATH_LENGTH);
+                NULLSYSCALL(config->socket,(void*)malloc(PATH_MAX),"malloc");
+                strncpy(config->socket,optarg,PATH_MAX);
                 flag_f=1;
                 break;
             case 'W':
@@ -44,7 +45,7 @@ int ottieniRichieste(config_client* config, t_coda* richieste, int argc, char** 
                     NULLSYSCALL(req,(richiesta*)malloc(sizeof(richiesta)),"malloc");
                     req->op = WriteFile; 
                     if((req->path=realpath(token,NULL))==NULL){
-                        perror("Errore nel convertire path locale in globale");
+                        perror("Errore nel convertire path locale in globale opzione -W");
                         return -1;
                     }
                     req->n=0;
@@ -87,8 +88,8 @@ int ottieniRichieste(config_client* config, t_coda* richieste, int argc, char** 
                 while(token!=NULL){ //aggiungi tante richieste di lettura quanti sono gli argomenti passati a -r
                     NULLSYSCALL(req,(richiesta*)malloc(sizeof(richiesta)),"malloc");
                     req->op = ReadFile; 
-                    if((req->path=realpath(token,NULL))==NULL){
-                        perror("Errore nel convertire path locale in globale");
+                    if((req->path=myrealpath(token))==NULL){
+                        perror("Errore nel convertire path locale in globale opzione -r");
                         return -1;
                     }
                     req->n=0;
@@ -116,7 +117,7 @@ int ottieniRichieste(config_client* config, t_coda* richieste, int argc, char** 
                 NULLSYSCALL(req,(richiesta*)malloc(sizeof(richiesta)),"malloc");
                 req->op = WhereToSave; 
                 if((req->pathToSave=realpath(optarg,NULL))==NULL){
-                    perror("Errore nel convertire path locale in globale");
+                    perror("Errore nel convertire path locale in globale opzione -d");
                     return -1;
                 }
                 req->n=0;
@@ -136,8 +137,8 @@ int ottieniRichieste(config_client* config, t_coda* richieste, int argc, char** 
                 while(token!=NULL){
                     NULLSYSCALL(req,(richiesta*)malloc(sizeof(richiesta)),"malloc");
                     req->op = DeleteFile; 
-                    if((req->path=realpath(token,NULL))==NULL){
-                        perror("Errore nel convertire path locale in globale");
+                    if((req->path=myrealpath(token))==NULL){
+                        perror("Errore nel convertire path locale in globale opzione -c");
                         return -1;
                     }
                     req->n=0;
@@ -160,7 +161,7 @@ int ottieniRichieste(config_client* config, t_coda* richieste, int argc, char** 
                 NULLSYSCALL(req,(richiesta*)malloc(sizeof(richiesta)),"malloc");
                 req->op = WhereToBackup; 
                 if((req->pathToSave=realpath(optarg,NULL))==NULL){
-                    perror("Errore nel convertire path locale in globale");
+                    perror("Errore nel convertire path locale in globale opzione -D");
                     return -1;
                 }
                 req->n=0;
@@ -202,8 +203,8 @@ int validazioneRichieste(t_coda* richieste){
             if(tmp->previous!=NULL && (((richiesta*)(tmp->previous->val))->op==ReadFile || ((richiesta*)(tmp->previous->val))->op==ReadNFiles)){
                 nodo* tmp1=tmp->previous;
                 do{// setto il parametro dove salvare il file letto in tutte le richieste di lettura date da una -r o -R precedenti a opzione -d
-                    NULLSYSCALL(((richiesta*)tmp1->val)->pathToSave,(void*)malloc(MAX_PATH_LENGTH),"malloc");
-                    strncpy(((richiesta*)tmp1->val)->pathToSave, ((richiesta*)tmp->val)->pathToSave, MAX_PATH_LENGTH);
+                    NULLSYSCALL(((richiesta*)tmp1->val)->pathToSave,(void*)malloc(PATH_MAX),"malloc");
+                    strncpy(((richiesta*)tmp1->val)->pathToSave, ((richiesta*)tmp->val)->pathToSave, PATH_MAX);
                     tmp1=tmp1->previous;
                 }while(tmp1!=NULL && (((richiesta*)tmp1->val)->op==ReadFile || ((richiesta*)tmp1->val)->op==ReadNFiles));
                 tmp=tmp->next;
@@ -217,8 +218,8 @@ int validazioneRichieste(t_coda* richieste){
             if(tmp->previous!=NULL && ((richiesta*)(tmp->previous->val))->op==WriteFile){
                 nodo* tmp1=tmp->previous;
                 do{// setto il parametro dove salvare il file espulso in tutte le richieste di scrittura date da -w o -W precedenti a opzione -D
-                    NULLSYSCALL(((richiesta*)tmp1->val)->pathToSave,(void*)malloc(MAX_PATH_LENGTH),"malloc");
-                    strncpy(((richiesta*)tmp1->val)->pathToSave, ((richiesta*)tmp->val)->pathToSave, MAX_PATH_LENGTH);
+                    NULLSYSCALL(((richiesta*)tmp1->val)->pathToSave,(void*)malloc(PATH_MAX),"malloc");
+                    strncpy(((richiesta*)tmp1->val)->pathToSave, ((richiesta*)tmp->val)->pathToSave, PATH_MAX);
                     tmp1=tmp1->previous;
                 }while(tmp1!=NULL && (((richiesta*)tmp1->val)->op==WriteFile));
                 tmp=tmp->next;
@@ -252,9 +253,9 @@ int isDirectory(char* file){
 //ritorna 0 in caso di successo; -1 altrimenti
 int scanDirectory(char* directory, t_coda* richieste, int n){
     static int i=0;
-    char buf[MAX_PATH_LENGTH];
+    char buf[PATH_MAX];
     richiesta* req;
-     if(getcwd(buf, MAX_PATH_LENGTH)==NULL){
+     if(getcwd(buf, PATH_MAX)==NULL){
         perror("getcwd");
         return -1;
     }
@@ -306,4 +307,45 @@ int scanDirectory(char* directory, t_coda* richieste, int n){
         return -1;
     }
     return 0;
+}
+//converte un path relativo(a partire dalla WD) in assoluto anche se il file non esiste
+//non funziona per path relativi che cominciano con ../
+//ritorna "ipotetico" path assoluto in caso di successo, -1 in caso di fallimento
+char* myrealpath(char* path){
+    if(path==NULL){
+        return NULL;
+    }
+    if(*path=='/'){ //è già un path assoluto
+        char* absPath=malloc(PATH_MAX);
+        if(absPath==NULL){
+            return NULL;
+        }
+        strncpy(absPath,path,PATH_MAX);
+        return absPath;
+    }
+    if(strlen(path)>2 && strncmp(path,"./",2)==0){ //path del tipo ./file1.txt --->salto il ./
+        path=path+2;
+    }
+    char* workDir;
+    if((workDir=malloc(PATH_MAX))==NULL){
+        perror("malloc");
+        return NULL;
+    }
+    //ottengo path working directory
+    if(getcwd(workDir,PATH_MAX)==NULL){
+        perror("getcwd");
+        return NULL;
+    }
+    int lenPath= strlen(workDir)+strlen(path)+2; 
+    if(lenPath>PATH_MAX){//path assoluto troppo lungo
+        free(workDir);
+        return NULL;
+    }
+    char* absPath=malloc(PATH_MAX);
+    if(absPath==NULL){
+        free(workDir);
+        return NULL;
+    }
+    snprintf(absPath, PATH_MAX, "%s/%s", workDir, path);
+    return absPath;
 }
