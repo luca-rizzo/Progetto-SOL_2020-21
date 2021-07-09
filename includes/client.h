@@ -1,7 +1,5 @@
 #if !defined(CLIENT_H)
 #define CLIENT_H
-#define MAX_PATH_LENGTH 255
-
 
 #include<util.h>
 #include<api.h>
