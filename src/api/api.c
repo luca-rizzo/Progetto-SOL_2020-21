@@ -4,8 +4,9 @@
 int fd_skt=-1;
 
 const char* socketname=NULL;
-static char* ottieniNomeDaPath(char* path);
+static char* ottieniDirDaPath(char* path);
 static int leggiNFileinDir(int n, const char* dirname, int fd_skt);
+int mkdir_p(const char *path);
 static struct timespec difftimespec(struct timespec begin, struct timespec end);
 static int BThenA(struct timespec a,struct timespec b);
 //permette di aprire una connessione con il server tramite il socket file sockname
@@ -563,17 +564,31 @@ static int leggiNFileinDir(int n, const char* dirname, int fd_skt){
     }
     return 0;
 }
-//scrive il contenuto di buffer nella directory dirToSave in un file il cui nome è ottenuto da pathFile
+//scrive il contenuto di buffer nella directory dirToSave: se il pathFile è un path assoluto creerò ricorsivamente delle directory in dirToSave
 //ritorna 0 in caso di successo; -1 in caso di fallimento
 int scriviContenutoInDirectory(void* buffer, size_t size, char* pathFile, char* dirToSave){
     FILE* ifp;
-    char* nomeFile=ottieniNomeDaPath(pathFile);
-    int dimNewPath=strlen(nomeFile)+strlen(dirToSave)+1;
+    char* dirToCreate = ottieniDirDaPath(pathFile);
+    if(dirToCreate!=NULL){ 
+        //devo creare delle directory in dirToSave
+        char* fullPath = malloc(PATH_MAX);
+        if(fullPath==NULL){
+            return -1;
+        }
+        snprintf(fullPath,PATH_MAX,"%s/%s",dirToSave,dirToCreate);
+        if(mkdir_p(fullPath)==-1){ //creo ricorsivamente le directory in cui salvare il file
+            return -1;
+        }
+        free(fullPath);
+        free(dirToCreate);
+    }
+    int dimNewPath=strlen(pathFile)+strlen(dirToSave)+1;
     char* newPath=malloc(dimNewPath);
     if(newPath==NULL){
         return -1;
     }
-    snprintf(newPath, dimNewPath, "%s%s", dirToSave, nomeFile);
+    snprintf(newPath, dimNewPath, "%s%s", dirToSave, pathFile);
+    fprintf(stderr, "%s\n", newPath);
     if((ifp=fopen(newPath,"wb"))==NULL){
         free(newPath);
         return -1;
@@ -593,15 +608,27 @@ int scriviContenutoInDirectory(void* buffer, size_t size, char* pathFile, char* 
     }
     return 0;
 }
-static char* ottieniNomeDaPath(char* path){
+//ritorna una stringa allocata dinamicamente che contiene il path della directory in cui salvare il file
+static char* ottieniDirDaPath(char* path){
     if(path == NULL) {
         return NULL;
     }
-    char* name;
-    if( (name = strrchr(path, '/')) == NULL )
-        name = path;
-    return name;
+    int len = strlen(path)+1;
+    char* dup = malloc(len);
+    if(dup==NULL)
+        return NULL;
+    strncpy(dup,path,len);
+    char* ptr = strrchr(dup, '/');
+    if (ptr==NULL) { //se non ho / il file si trova nella directory corrente
+        free(dup);
+        return NULL;
+    }
+    else{
+        *ptr='\0'; //elimino il nome del file inserendo un carattere di terminazione stringa
+    }
+    return dup;
 }
+
 static struct timespec difftimespec(struct timespec begin, struct timespec end){
     struct timespec timepass;
     timepass.tv_sec=end.tv_sec - begin.tv_sec;
@@ -614,4 +641,46 @@ static int BThenA(struct timespec a,struct timespec b) {
         return a.tv_nsec > b.tv_nsec;
     else
         return a.tv_sec > b.tv_sec;
+}
+
+
+//source: https://gist.github.com/JonathonReinhart/8c0d90191c38af2dcadb102c4e202950
+//crea ricorsivamente le directory a partire dalla working directory
+
+int mkdir_p(const char *path)
+{
+    /* Adapted from http://stackoverflow.com/a/2336245/119527 */
+    const size_t len = strlen(path);
+    char _path[PATH_MAX];
+    char *p; 
+
+    errno = 0;
+
+    /* Copy string so its mutable */
+    if (len > sizeof(_path)-1) {
+        errno = ENAMETOOLONG;
+        return -1; 
+    }   
+    strcpy(_path, path);
+
+    /* Iterate the string */
+    for (p = _path + 1; *p; p++) {
+        if (*p == '/') {
+            /* Temporarily truncate */
+            *p = '\0';
+
+            if (mkdir(_path, S_IRWXU) != 0) {
+                if (errno != EEXIST)
+                    return -1; 
+            }
+
+            *p = '/';
+        }
+    }   
+
+    if (mkdir(_path, S_IRWXU) != 0) {
+        if (errno != EEXIST)
+            return -1; 
+    }   
+    return 0;
 }
