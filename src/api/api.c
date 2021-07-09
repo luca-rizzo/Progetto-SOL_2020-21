@@ -11,13 +11,16 @@ static int BThenA(struct timespec a,struct timespec b);
 //permette di aprire una connessione con il server tramite il socket file sockname
 //ritorna 0 in caso di successo; -1 in caso di fallimento, setta errno
 int openConnection(const char* sockname, int msec, const struct timespec abstime){
-    if(fd_skt!=-1){ //sei già connesso
-        errno=EISCONN;
-        return -1;
-    }
     if(sockname==NULL){ //parametri invalidi
         errno=EINVAL;
         return -1;
+    }
+    int len=strlen(sockname);
+    if(socketname!=NULL){
+        if(strncmp(sockname,socketname,len)==0){ //sei già connesso al server
+        errno=EISCONN;
+        return -1;
+        }
     }
     int res;
     struct sockaddr_un sa;
