@@ -53,6 +53,7 @@ static void *workerpool_thread(void *threadpool) {
 	    pool->taskonthefly--;
     }
     UNLOCK_RETURN(&(pool->lock), NULL);
+    scriviSuFileLog(logStr,"Thread %d: ho teminato e sto uscendo\n\n");
     return NULL;
 }
 
