@@ -28,8 +28,11 @@ TARGETS		= $(CLIENT_BIN) \
 
 
 
-.PHONY: all cleanall cleanTest1 cleanTest2 test1 test2 test3
+.PHONY: all cleanall cleanTest1 cleanTest2 test1 test2 
 .SUFFIXES: .c .h
+
+#regola di default
+all		: $(TARGETS)
 
 #file oggetto client
 objs/client/%.o: src/client/%.c $(INCL_DIR)/client.h
@@ -39,7 +42,7 @@ objs/client/%.o: src/client/%.c $(INCL_DIR)/client.h
 objs/server/%.o: src/server/%.c $(INCL_DIR)/server.h
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $<  $(LIBS)
 
-all		: $(TARGETS)
+
 
 #eseguibile client
 $(CLIENT_BIN): $(CLIENT_OBJS) $(LIB_DIR)/libapi.so $(LIB_DIR)/libstruttureDati.so
@@ -86,13 +89,14 @@ test2: 	cleanTest2
 		@killall -s 1 -w $(SERVER_BIN)
 		@printf "\ntest2 terminato\n"
 
-#cleanall 
+#clean target
 
 cleanall: cleanTest1 cleanTest2
 		rm -f -r objs/*/*.o
 		rm -f -r mylibs/*
 		rm -f -r tmp/csSock.csSock
 		rm -f -r bin/*
+		rm -f -r log/*
 
 cleanTest1: 
 		rm -f -r test/test1/fileLetti/*/*
@@ -100,6 +104,7 @@ cleanTest1:
 cleanTest2: 
 		rm -f -r test/test2/fileLetti/*/*
 		rm -f -r test/test2/backupFile/*
+		
 
 
 
