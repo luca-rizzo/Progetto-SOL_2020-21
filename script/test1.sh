@@ -13,3 +13,7 @@ echo "Client 3 testa -r e -c"
 ${CLIENT}  -f ${SOCKPATH} -r ${WFILE}/mare.jpg,${WFILE}/prato.jpg -d ${RDIR}/readFile -t 200 -c ${WFILE}/mare.jpg,${WFILE}/prato.jpg -p
 echo "Client 4 testa -R"
 ${CLIENT}  -f ${SOCKPATH} -R -d ${RDIR}/readNFiles -t 200 -p
+
+
+
+
