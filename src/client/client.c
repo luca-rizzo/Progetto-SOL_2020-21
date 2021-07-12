@@ -1,8 +1,12 @@
 #include<client.h>
-
+//*****VARIABILI GLOBALI*****//
 t_coda* richieste; //coda che mantiene tutte le richieste del client
 
-static void stampaRichieste(t_coda* richieste);
+//*****FUNZIONI PRIVATE DI IMPLEMENTAZIONE*****//
+/*
+    @funzione clean_up
+    @descrizione: effettua la pulizia della coda delle richieste quando il programma termina. Viene installata con la funzione atexit 
+*/
 static void clean_up ();
 
 int main(int argc,char** argv){
@@ -12,39 +16,49 @@ int main(int argc,char** argv){
     config.millisec=0;
     config.stampaStOut=0;
     config.socket=SOCKNAME;
+    //installo funzione di pulizia per gli elementi allocati sullo heap
     if(atexit(clean_up)!=0){
         perror("atexit"); //proseguo lo stesso
     }
     richieste=inizializzaCoda(NULL);
+    if(richieste==NULL){
+        fprintf(stderr, "Errore nell'inizializzazione della coda delle richieste");
+        exit(EXIT_FAILURE);
+    }
+    //effettuo il parsing della linea di comando
     int r;
     if((r=ottieniRichieste(&config,richieste,argc,argv))==-1){
         fprintf(stderr,"Richieste non valide!\n");
-        return -1;
+        exit(EXIT_FAILURE);
     }
-    if(r==1){ //ho stampato helpUsage()-> esco
-        return 0;
+    if(r==1){ 
+        //ho stampato helpUsage()-> esco
+        exit(EXIT_SUCCESS);    
     }
-    
+    //controllo se la coda delle richieste soddisfa la specifica 
     if(validazioneRichieste(richieste)==-1){
         fprintf(stderr,"Richieste mal formulate!\n");
-        return -1;
+        exit(EXIT_FAILURE);
     }
     //APRI CONNESSIONE
     struct timespec t={10, 0}; //riprova a collegarsi al server dopo 10 secondi
     if(openConnection(config.socket,1000, t)==-1){
         perror("openConnection");
-        return -1;
+        exit(EXIT_FAILURE);
     }
+
     //ESEGUI RICHIESTE
-    eseguiRichieste(richieste,config);   //in base alle richieste fa varie chiamate all'API implementata
-    //stampaRichieste(richieste);
+    //in base alle richieste farò varie chiamate all'API implementata
+    eseguiRichieste(richieste,config);   
+
     // //CHIUDI CONNESSIONE
     if(closeConnection(config.socket)==-1){
         perror("closeConnection");
-        return -1;
+        exit(EXIT_FAILURE);
     }
     return 0;
 }
+
 static void clean_up (){
     if(richieste == NULL)
         return;
@@ -52,14 +66,7 @@ static void clean_up (){
         fprintf(stderr,"Errore nella liberazione coda di richieste!\n");
     }
 }
-    
-void stampaRichieste(t_coda* richieste){
-    nodo* p=prelevaDaCoda(richieste);
-    while(p!=NULL){
-        printf("%d, %s, %s\n", ((richiesta*)p->val)->op, ((richiesta*)p->val)->path, ((richiesta*)p->val)->pathToSave);
-        p=prelevaDaCoda(richieste);
-    }
-}
+
 void freeRichiesta(void* val){
     richiesta* r= (richiesta*)val;
     if(r==NULL){

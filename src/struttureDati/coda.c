@@ -1,39 +1,51 @@
 #include<util.h>
 #include<coda.h>
-//se non mi passano una funzione di compare tra valori della coda userò questa
-int compare (void* a, void* b){
+
+
+/*
+    @funzione compare
+    @descrizione funzione di comparazione fra interi. Viene usata come generica funzione di compare se non ne viene passata una
+    @param a è il puntatore al primo intero
+    @param b è il puntatore al secondo intero
+    @return 1 se il valore puntato da a è uguale al valore puntato da b, 0 altrimenti
+*/
+static int compare (void* a, void* b){
     int x = *((int*)a);
     int y = *((int*)b);
     return x==y;
 }
-//ritorna un puntatore ad una coda in caso di successo; NULL altrimenti
+
+//*****FUNZIONI DI IMPLEMENTAZIONE INTERFACCIA*****//
+
 t_coda* inizializzaCoda(int (*cmp) (void*,void*)){
     t_coda* coda=(t_coda*)malloc(sizeof(t_coda));
-    if(coda==NULL){
-        perror("malloc");
+    if(!coda){
+        errno = EINVAL;
         return NULL;
     }
     coda->head=NULL;
     coda->tail=NULL;
     coda->size=0;
-    if(cmp!=NULL)
-        coda->cmp=cmp;
-    else
-        coda->cmp=compare;
+    //se non passo alcuna funzione di compare userò la funzione generica di sopra
+    coda->cmp = cmp ? cmp : compare;
     return coda;
 }
-//ritorna 0 in caso di successo, -1 altrimenti
+
 int aggiungiInCoda(t_coda* coda,void* val){
-    if(coda==NULL){
+    if(!coda){
+        errno = EINVAL;
         return -1;
     }
+    //alloco nuovo nodo
     nodo* p = malloc(sizeof(nodo));
-    if(p==NULL){
+    if(!p){
         return -1;
     }
+    //il valore del nodo sarà quello passato come argomento
     p->val=val;
     p->next=NULL;
-    if(coda->head == NULL){
+    if(!(coda->head)){
+        //coda vuota
         coda->head = p;
         coda->head->previous=NULL;
     }
@@ -45,28 +57,36 @@ int aggiungiInCoda(t_coda* coda,void* val){
     coda->size++;
     return 0;
 }
-//ritorna il nodo in testa ala coda in caso di successo; NULL se la coda è vuota
+
 nodo* prelevaDaCoda(t_coda* coda){
-    if(coda->head==NULL){
+    if(!coda){
+        errno = EINVAL;
+        return NULL;
+    }
+    if(!(coda->head)){
+        //coda vuota
         return NULL;
     }
     nodo* p = coda->head;
     coda->head=coda->head->next;
-    if(coda->head==NULL){
+    if(!(coda->head)){
+        //coda vuota
         coda->tail=NULL;
     }
     coda->size--;
     return p;
 }
-//ritorna 0 se distrugge correttamente la coda;-1 altrimenti
+
 int distruggiCoda(t_coda* coda, void (*liberaValoreNodo)(void*)){
-    if(coda==NULL){
+    if(!coda){
+        errno = EINVAL;
         return -1;
     }
     nodo* p;
-    while(coda->head!=NULL){
+    while(coda->head){
         p=coda->head;
         coda->head=coda->head->next;
+        //se ho passato una funzione per liberare il valore, userò tale funzione per deallocare il valore
         if(*liberaValoreNodo!=NULL)
             (*liberaValoreNodo)(p->val);
         free(p);
@@ -75,13 +95,13 @@ int distruggiCoda(t_coda* coda, void (*liberaValoreNodo)(void*)){
     free(coda);
     return 0;
 }
-//ritorna 1 se esiste un nodo con valore=val; 0 altrimenti
+
 int isInCoda(t_coda* coda, void* val){
-    if(coda==NULL){
+    if(!coda){
         return 0;
     }
     nodo* p=coda->head;
-    while(p!=NULL){
+    while(p){
         if(((*coda->cmp)(p->val, val))){
             return 1;
         }
@@ -89,22 +109,26 @@ int isInCoda(t_coda* coda, void* val){
     }
     return 0;
 }
-//ritorna 0 se il nodo con valore val viene rimosso; -1 altrimenti
+
 int rimuoviDaCoda(t_coda* coda, void* val, void (*liberaValoreNodo)(void*)){
-    if(coda==NULL){
+    if(!coda){
+        errno = EINVAL;
         return -1;
     }
     nodo* p;
-    if(coda->head==NULL){
+    if(!(coda->head)){
         return -1;
     }
     if(((*coda->cmp)(coda->head->val, val))){
+    //il valore da rimuovere è la testa della coda
         p=coda->head;
         coda->head=coda->head->next;
         if(coda->head!=NULL)
             coda->head->previous=NULL;
-        else
+        else{
+            //la coda è vuota
             coda->tail=NULL;
+        }
         if(*liberaValoreNodo!=NULL){
             (*liberaValoreNodo)(p->val);
         }
@@ -112,8 +136,9 @@ int rimuoviDaCoda(t_coda* coda, void* val, void (*liberaValoreNodo)(void*)){
         coda->size--;
         return 0;
     }
+    //vado alla ricerca del valore
     p=coda->head->next;
-    while(p!=NULL){
+    while(p){
         if(((*coda->cmp)(p->val, val))){
             break;
         }
@@ -123,6 +148,7 @@ int rimuoviDaCoda(t_coda* coda, void* val, void (*liberaValoreNodo)(void*)){
         return -1;
     }
     if(coda->tail==p){
+        //il valore da rimuovere è l'ultimo elemento della coda
         coda->tail=coda->tail->previous;
         coda->tail->next=NULL;
     }
@@ -130,9 +156,11 @@ int rimuoviDaCoda(t_coda* coda, void* val, void (*liberaValoreNodo)(void*)){
         p->next->previous=p->previous;
         p->previous->next=p->next;
     }
+    //se ho passato una funzione per liberare il valore, userò tale funzione per deallocare il valore
     if(*liberaValoreNodo!=NULL){
         (*liberaValoreNodo)(p->val);
     }
+    //libero nodo
     free(p);
     coda->size--;
     return 0;

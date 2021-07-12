@@ -1,35 +1,80 @@
 #include<util.h>
 #include<api.h>
 #include<conn.h>
+
+//*****VARIABILI GLOBALI*****//
+
+//fd del socket file associato alla connessione AF_UNIX con il server
 int fd_skt=-1;
 
+//nome del socket file al quale sono connesso
 const char* socketname=NULL;
+
+//*****FUNZIONI PRIVATE DI IMPLEMENTAZIONE*****//
+
+/*
+    @funzione ottieniDirDaPath
+    @descrizione: permette di ottenere il path della directory in cui è contenuto il file con pathname path
+    @param path è il path del file di cui voglio sapere path directory
+    @return una stringa allocata sullo heap contente il path della directory in caso di successo, NULL altrimenti, setta errno
+*/
 static char* ottieniDirDaPath(char* path);
+
+/*
+    @funzione leggiNFileinDir
+    @descrizione: permette di leggere n file (inviati dal server) tramite fd_skt e salvarli nella directory dirname
+    @param n è il numero di file da leggere
+    @param dirname è la directory in cui salvare i file letti
+    @param fd_skt è l'fd del socket da cui leggere i file
+    @return 0 in caso di successo, -1 in caso di fallimento, setta errno
+
+*/
 static int leggiNFileinDir(int n, const char* dirname, int fd_skt);
-int mkdir_p(const char *path);
+
+/*
+    source: https://gist.github.com/JonathonReinhart/8c0d90191c38af2dcadb102c4e202950
+    @funzione mkdir_r
+    @descrizione: permette di creare ricorsivamente le directory secondo quanto indicato da path
+    @param path indica quali directory creare ricorsivamente
+    @return 0 in caso di successo, -1 in caso di fallimento, setta errno
+*/
+static int mkdir_p(const char *path);
+
+/*
+    @funzione: difftimespec
+    @descrizione: permette di effettuare la differenza tra due tipi di dato struct timespec
+    @param begin indica il tempo iniziale
+    @param end indica tempo finale
+    @return una struct timespec che contiene la differenza tra le due strutture dato timespec
+*/
 static struct timespec difftimespec(struct timespec begin, struct timespec end);
-static int BThenA(struct timespec a,struct timespec b);
-//permette di aprire una connessione con il server tramite il socket file sockname
-//ritorna 0 in caso di successo; -1 in caso di fallimento, setta errno
+
+//*****FUNZIONI DI IMPLEMENTAZIONE API*****//
+
 int openConnection(const char* sockname, int msec, const struct timespec abstime){
-    if(sockname==NULL){ //parametri invalidi
+    if(sockname==NULL || msec<0){ 
+        //argomenti invalidi
         errno=EINVAL;
         return -1;
     }
     int len=strlen(sockname);
     if(socketname!=NULL){
-        if(strncmp(sockname,socketname,len)==0){ //sei già connesso al server
-        errno=EISCONN;
-        return -1;
+        if(strncmp(sockname,socketname,len)==0){ 
+            //sei già connesso al server
+            errno=EISCONN;
+            return -1;
         }
     }
     int res;
-    struct sockaddr_un sa;
-    memset(&sa, '0', sizeof(sa));
     struct timespec timeToRetry,tempoInizio,tempoCorrente,tempoPassato;
+    struct sockaddr_un sa;
+    //imposto il tempo che deve intercorrere tra due richieste di connessione
     timeToRetry.tv_sec = msec / 1000;
     timeToRetry.tv_nsec = (msec % 1000) * 1000000;
-    if(strlen(sockname)+1 > UNIX_PATH_MAX){ //sockname deve essere lungo al massimo UNIX_PATH_MAX
+    //inizializzo sa
+    memset(&sa, '0', sizeof(sa));
+    if(strlen(sockname)+1 > UNIX_PATH_MAX){ 
+        //sockname deve essere lungo al massimo UNIX_PATH_MAX
         errno=EINVAL;
         return -1;
     }
@@ -38,28 +83,35 @@ int openConnection(const char* sockname, int msec, const struct timespec abstime
     if((fd_skt=socket(AF_UNIX, SOCK_STREAM,0))==-1){
         return -1;
     }
-    if(clock_gettime(CLOCK_MONOTONIC,&tempoInizio)==-1){//inizializzo tempo inizio
+    //inizializzo tempo inizio
+    if(clock_gettime(CLOCK_MONOTONIC,&tempoInizio)==-1){
         fd_skt=-1;
         return -1;
     }
-    if(clock_gettime(CLOCK_MONOTONIC,&tempoCorrente)==-1){//inizializzo tempo corrente
+    //inizializzo tempo corrente
+    if(clock_gettime(CLOCK_MONOTONIC,&tempoCorrente)==-1){
         fd_skt=-1;
         return -1;
     }
+    //inizializzo tempo passato
     tempoPassato=difftimespec(tempoInizio,tempoCorrente);
     while(BThenA(abstime,tempoPassato) && (res=connect(fd_skt,(struct sockaddr *) &sa, sizeof(sa))) == -1){
         fprintf(stdout,"Provo a ricollegarmi\n");
+        //aspetto msec prima di tentare la riconnessione
         if(nanosleep(&timeToRetry,NULL)!=0){
             fd_skt=-1;
             return -1;
         }
-        if(clock_gettime(CLOCK_MONOTONIC,&tempoCorrente)==-1){//aggiorno tempo corrente
+        //aggiorno tempo corrente
+        if(clock_gettime(CLOCK_MONOTONIC,&tempoCorrente)==-1){
             fd_skt=-1;
             return -1;
         }
+        //aggiorno tempo passato
         tempoPassato=difftimespec(tempoInizio,tempoCorrente);
     }
-    if(res==-1){ // sono uscito perchè è scaduto il timer
+    if(res==-1){ 
+        // sono uscito perchè è scaduto il timer
         fd_skt=-1;
         errno = ETIMEDOUT;
         return -1;
@@ -67,14 +119,19 @@ int openConnection(const char* sockname, int msec, const struct timespec abstime
     socketname=sockname;
     return 0;
 }
-//permette di chiudere la connessione associata al socket file sockname. 
-//ritorna 0 in caso di successo, -1 in caso di fallimento, setta errno
+
 int closeConnection(const char* sockname){
+    if(sockname==NULL){
+        //argomenti invalidi
+        return -1;
+    }
     int len=strlen(sockname);
     if(strncmp(sockname,socketname,len+1)!=0){
+        //non sei connesso al server
         errno=ENOTCONN;
         return -1;
     }
+    //chiudo la connessione con il server resettando variabili globali
     socketname=NULL;
     if(close(fd_skt)==-1){
         return -1;
@@ -82,14 +139,15 @@ int closeConnection(const char* sockname){
     fd_skt=-1;
     return 0;
 }
-//permette di aprire il file pathname nel server; se flags=O_CREAT permette di creare il file (se questo non esiste)
-//ritorna 0 in caso di successo, -1 in caso di fallimento, setta errno;
+
 int openFile(const char* pathname,int flags){
-    if(pathname==NULL){ //parametri non validi
+    if(pathname==NULL){ 
+        //argomenti non validi
         errno =EINVAL;
         return -1;
     }
-    if(fd_skt==-1){ //non sei connesso al server
+    if(fd_skt==-1){ 
+        //non sei connesso al server
         errno=ENOTCONN;
         return -1;
     }
@@ -99,6 +157,8 @@ int openFile(const char* pathname,int flags){
         return -1; //errno settata da writen
     }
     //secondo il protocollo di comunicazione invio lunghezza path, path del file da aprire e relativi flag
+
+    //invio lunghezza path
     int len=strlen(pathname)+1;
     if(writen(fd_skt,&len,sizeof(int))==-1){
         return -1;
@@ -117,22 +177,26 @@ int openFile(const char* pathname,int flags){
         return -1;
     }
     if(nread==0){
+        //errore nel protocollo di comunicazione
         errno=EBADMSG;
         return -1;
     }
     if(res!=0){
+        //l'operazione è fallita -> setto errno col valore ritornato dal server e ritorno -1;
         errno=res;
         return -1;
     } 
-    //l'operazione è terminata correttamente -> il file è stato aperto
+    //l'operazione è terminata correttamente -> il file è stato aperto/creato
     return 0;
 }
 int readFile(const char* pathname, void** buf, size_t* size){
-    if(pathname==NULL){ //parametri non validi
+    if(pathname==NULL){ 
+        //argomenti non validi
         errno =EINVAL;
         return -1;
     }
-    if(fd_skt==-1){ //non sei connesso al server
+    if(fd_skt==-1){ 
+        //non sei connesso al server
         errno=ENOTCONN;
         return -1;
     }
@@ -142,10 +206,13 @@ int readFile(const char* pathname, void** buf, size_t* size){
         return -1; //errno settata da writen
     }
     //secondo il protocollo di comunicazione invio lunghezza path e path del file da leggere
+
+    //invio lunghezza path
     int len=strlen(pathname)+1;
     if(writen(fd_skt,&len,sizeof(int))==-1){
         return -1;
     }
+    //invio contenuto path
     if(writen(fd_skt,(void*)pathname,len)==-1){
         return -1;
     }
@@ -155,10 +222,12 @@ int readFile(const char* pathname, void** buf, size_t* size){
         return -1;
     }
     if(nread==0){
+        //errore nel protocollo di comunicazione
         errno=EBADMSG;
         return -1;
     }
-    if(res!=0){ //c'è stato un errore?
+    if(res!=0){ 
+        //l'operazione è fallita -> setto errno col valore ritornato dal server e ritorno -1;
         errno=res;
         return -1;
     } 
@@ -169,38 +238,47 @@ int readFile(const char* pathname, void** buf, size_t* size){
         return -1;
     }
     if(nread==0){
+        //errore nel protocollo di comunicazione
         errno = EBADMSG;
         return -1;
     }
     void* buffer=NULL;
     if(dim!=0){
-        buffer=malloc(dim); //alloco un buffer di tale dimensione
-        if(readn(fd_skt,buffer,dim)==-1){ //leggo contenuto file
+        //alloco un buffer di tale dimensione
+        buffer=malloc(dim); 
+        //leggo contenuto file
+        if(readn(fd_skt,buffer,dim)==-1){ 
             return -1;
         }
         if(nread==0){
+            //errore nel protocollo di comunicazione
             free(buffer);
             errno = EBADMSG;
             return -1;
         }
     }
-    *size=dim; //ritorno byte letti
-    (*buf)=buffer; //ritorno contenuto file
+    //ritorno bytes letti
+    *size=dim; 
+    //ritorno contenuto file
+    (*buf)=buffer; 
     //l'operazione è terminata correttamente -> il file è stato letto
     return 0;
 }
-//permette di scrivere sul server un file solo se l'ultima operazione sul file è stata la sua creazione
+
 int writeFile(const char* pathname, const char* dirname){
-    if(pathname==NULL){ //parametri non validi
+    if(pathname==NULL){ 
+        //argomenti non validi
         errno =EINVAL;
         return -1;
     }
-    if(fd_skt==-1){ //non sei connesso
+    if(fd_skt==-1){ 
+        //non sei connesso
         errno=ENOTCONN;
         return -1;
     }
     FILE* ifp;
-    if((ifp=fopen(pathname,"rb"))==NULL){ //apro il file
+    //apro il file presente nel mio file system
+    if((ifp=fopen(pathname,"rb"))==NULL){ 
         return -1; //setta errno
     }
     //scopro la dimensione del file
@@ -218,9 +296,9 @@ int writeFile(const char* pathname, const char* dirname){
         return -1;
     }
     rewind(ifp);
+    //alloco un buffer di tale dimensione
     void* buffer= malloc(size);
     if(buffer==NULL){
-        
         if(fclose(ifp)!=0){
             return -1;
         }
@@ -235,41 +313,53 @@ int writeFile(const char* pathname, const char* dirname){
         }
         return -1;
     }
-    if(fclose(ifp)!=0){ //chiudo il file
+    //chiudo il file
+    if(fclose(ifp)!=0){ 
         return -1;
     }
     //abbiamo letto il contenuto del file in buffer; adesso lo mandiamo al server
+
+    //secondo il protocollo di comunicazione invio operazione da effettuare
     t_op operazione=wr;
-    if(writen(fd_skt,&operazione,sizeof(t_op))==-1){//secondo il protocollo di comunicazione invio operazione da effettuare
+    if(writen(fd_skt,&operazione,sizeof(t_op))==-1){
         free(buffer);
         return -1; //errno settata da writen
     }
     //secondo il protocollo di comunicazione invio lunghezza path e path del file da scrivere
+
+    //invio lunghezza path
     int len=strlen(pathname)+1;
     if(writen(fd_skt,&len,sizeof(int))==-1){
         free(buffer);
         return -1;
     }
+    //invio path
     if(writen(fd_skt,(void*)pathname,len)==-1){
         free(buffer);
         return -1;
     } 
     //posso inviare il file?
+
     int res, nread;
-    if((nread=readn(fd_skt,&res,sizeof(int)))==-1){ //leggo risultato operazione fino a questo punto
+    //leggo risultato operazione fino a questo punto
+    if((nread=readn(fd_skt,&res,sizeof(int)))==-1){ 
         free(buffer);
         return -1;
     }
     if(nread==0){
         free(buffer);
         errno=EBADMSG;
+        //errore nel protocollo di comunicazione
         return -1;
     }
     if(res!=0){
         free(buffer);
         errno=res;
+        //l'operazione è fallita -> setto errno col valore ritornato dal server e ritorno -1;
         return -1;
-    } //posso inviare il file
+    } 
+    
+    //posso inviare il file
 
     //secondo il protocollo di comunicazione invio dimensione file e contenuto
     if(writen(fd_skt,&size,sizeof(size_t))==-1){
@@ -289,11 +379,13 @@ int writeFile(const char* pathname, const char* dirname){
         return -1;
     }
     if(nread==0){
+        //errore nel protocollo di comunicazione
         errno=EBADMSG;
         return -1;
     }
     if(res!=0){
         errno=res;
+        //l'operazione è fallita -> setto errno col valore ritornato dal server e ritorno -1;
         return -1;
     }
     //operazione completata correttamente->contenuto scritto sul file
@@ -303,6 +395,7 @@ int writeFile(const char* pathname, const char* dirname){
         return -1;
     }
     if(nread==0){
+        //errore nel protocollo di comunicazione
         errno=EBADMSG;
         return -1;
     }
@@ -314,33 +407,43 @@ int writeFile(const char* pathname, const char* dirname){
 }
 int removeFile(const char* pathname){
     if(pathname==NULL){
+        //argomenti non validi
         errno = EINVAL;
         return -1;
     }
-    if(fd_skt==-1){ //non sei connesso
+    if(fd_skt==-1){ 
+        //non sei connesso
         errno=ENOTCONN;
         return -1;
     }
     t_op operazione=re;
-    if(writen(fd_skt,&operazione,sizeof(t_op))==-1){//secondo il protocollo di comunicazione invio operazione da effettuare
+    //secondo il protocollo di comunicazione invio operazione da effettuare
+    if(writen(fd_skt,&operazione,sizeof(t_op))==-1){
         return -1; //errno settata da writen
     }
+    //secondo il protocollo di comunicazione invio lunghezza path e path del file da leggere
+    //invio lunghezza path
     int len=strlen(pathname)+1;
-    if(writen(fd_skt,&len,sizeof(int))==-1){//secondo il protocollo di comunicazione invio lunghezza path e path del file da leggere
+    if(writen(fd_skt,&len,sizeof(int))==-1){
         return -1;
     }
+    //invio contenuto path
     if(writen(fd_skt,(void*)pathname,len)==-1){
         return -1;
     }
+
+    //leggo risultato operazione
     int res, nread;
-    if((nread=readn(fd_skt,&res,sizeof(int)))==-1){ //leggo risultato operazione 
+    if((nread=readn(fd_skt,&res,sizeof(int)))==-1){ 
         return -1;
     }
     if(nread==0){
+        //errore nel protocollo di comunicazione
         errno=EBADMSG;
         return -1;
     }
     if(res!=0){
+        //l'operazione è fallita -> setto errno col valore ritornato dal server e ritorno -1;
         errno=res;
         return -1;
     } 
@@ -349,33 +452,42 @@ int removeFile(const char* pathname){
 }
 int closeFile(const char* pathname){
     if(pathname==NULL){
+        //argomenti non validi
         errno = EINVAL;
         return -1;
     }
-    if(fd_skt==-1){//non sei connesso
+    if(fd_skt==-1){
+        //non sei connesso
         errno=ENOTCONN;
         return -1;
     }
+    //secondo il protocollo di comunicazione invio operazione da effettuare
     t_op operazione=cl;
-    if(writen(fd_skt,&operazione,sizeof(t_op))==-1){//secondo il protocollo di comunicazione invio operazione da effettuare
+    if(writen(fd_skt,&operazione,sizeof(t_op))==-1){
         return -1; //errno settata da writen
     }
+    //secondo il protocollo di comunicazione invio lunghezza path e path del file da leggere
+    //invio lunghezza path
     int len=strlen(pathname)+1;
-    if(writen(fd_skt,&len,sizeof(int))==-1){//secondo il protocollo di comunicazione invio lunghezza path e path del file da leggere
+    if(writen(fd_skt,&len,sizeof(int))==-1){
         return -1;
     }
+    //invio contenuto path
     if(writen(fd_skt,(void*)pathname,len)==-1){
         return -1;
     }
+    //leggo risultato operazione
     int res, nread;
-    if((nread=readn(fd_skt,&res,sizeof(int)))==-1){ //leggo risultato operazione
+    if((nread=readn(fd_skt,&res,sizeof(int)))==-1){ 
         return -1;
     }
     if(nread==0){
+        //errore nel protocollo di comunicazione
         errno=EBADMSG;
         return -1;
     }
     if(res!=0){
+        //l'operazione è fallita -> setto errno col valore ritornato dal server e ritorno -1;
         errno=res;
         return -1;
     } 
@@ -384,37 +496,48 @@ int closeFile(const char* pathname){
 }
 int appendToFile(const char* pathname, void* buf, size_t size, const char* dirname){
     if(pathname==NULL){
+        //argomenti invalidi
         errno =EINVAL;
         return -1;
     }
     if(fd_skt==-1){
+        //non sei connesso
         errno=ENOTCONN;
         return -1;
     }
+    //secondo il protocollo di comunicazione invio operazione da effettuare
     t_op operazione=ap;
-    if(writen(fd_skt,&operazione,sizeof(t_op))==-1){//secondo il protocollo di comunicazione invio operazione da effettuare
+    if(writen(fd_skt,&operazione,sizeof(t_op))==-1){
         return -1; //errno settata da writen
     }
     //secondo il protocollo di comunicazione invio lunghezza path e path del file da scrivere
+
+    //invio lunghezza path
     int len=strlen(pathname)+1;
     if(writen(fd_skt,&len,sizeof(int))==-1){
         return -1;
     }
+    //invio contenuto path
     if(writen(fd_skt,(void*)pathname,len)==-1){
         return -1;
-    } //posso inviare il contenuto da aggiungere al file?
+    } 
+
+    //posso inviare il contenuto da aggiungere al file? leggo risultato operazione fino a questo punto
     int res, nread;
-    if((nread=readn(fd_skt,&res,sizeof(int)))==-1){ //leggo risultato operazione fino a questo punto
+    if((nread=readn(fd_skt,&res,sizeof(int)))==-1){ 
         return -1;
     }
     if(nread==0){
+        //errore nel protocollo di comunicazione
         errno=EBADMSG;
         return -1;
     }
     if(res!=0){
+        //l'operazione è fallita -> setto errno col valore ritornato dal server e ritorno -1;
         errno=res;
         return -1;
-    } //posso inviare buf
+    } 
+    //posso inviare buf
 
     //secondo il protocollo di comunicazione invio dimensione buf e buf
 
@@ -431,10 +554,12 @@ int appendToFile(const char* pathname, void* buf, size_t size, const char* dirna
         return -1;
     }
     if(nread==0){
+        //errore nel protocollo di comunicazione
         errno=EBADMSG;
         return -1;
     }
     if(res!=0){
+        //l'operazione è fallita -> setto errno col valore ritornato dal server e ritorno -1;
         errno=res;
         return -1;
     }
@@ -445,6 +570,7 @@ int appendToFile(const char* pathname, void* buf, size_t size, const char* dirna
         return -1;
     }
     if(nread==0){
+        //errore nel protocollo di comunicazione
         errno=EBADMSG;
         return -1;
     }
@@ -456,26 +582,32 @@ int appendToFile(const char* pathname, void* buf, size_t size, const char* dirna
 }
 int readNFiles(int N, const char* dirname){
     if(fd_skt==-1){
+        //non sei connesso al server
         errno=ENOTCONN;
         return -1;
     }
+    //secondo il protocollo di comunicazione invio operazione da effettuare
     t_op operazione=rn;
-    if(writen(fd_skt,&operazione,sizeof(t_op))==-1){//secondo il protocollo di comunicazione invio operazione da effettuare
+    if(writen(fd_skt,&operazione,sizeof(t_op))==-1){
         return -1; //errno settata da writen
     }
-    if(writen(fd_skt, &N ,sizeof(int))==-1){//secondo il protocollo di comunicazione invio numero file da leggere
+    //secondo il protocollo di comunicazione invio numero file da leggere
+    if(writen(fd_skt, &N ,sizeof(int))==-1){
         return -1; //errno settata da writen
     }
 
+    //leggo risultato operazione fino a questo punto
     int res, nread;
-    if((nread=readn(fd_skt,&res,sizeof(int)))==-1){ //leggo risultato operazione fino a questo punto
+    if((nread=readn(fd_skt,&res,sizeof(int)))==-1){ 
         return -1;
     }
     if(nread==0){
+        //errore nel protocollo di comunicazione
         errno=EBADMSG;
         return -1;
     }
     if(res!=0){
+        //l'operazione è fallita -> setto errno col valore ritornato dal server e ritorno -1;
         errno=res;
         return -1;
     }
@@ -484,6 +616,7 @@ int readNFiles(int N, const char* dirname){
         return -1;
     }
     if(nread==0){
+        //errore nel protocollo di comunicazione
         errno=EBADMSG;
         return -1;
     }
@@ -493,16 +626,21 @@ int readNFiles(int N, const char* dirname){
     }
     return res;
 }
-//permette di leggere n files inviati dal server e di memorizzarli nella cartella dirname
+
 static int leggiNFileinDir(int n, const char* dirname, int fd_skt){
     int len;  
     void* path;
     int nread;
+    int notAllFile=0;
     for(int i=0;i<n;i++){
-        if((nread=readn(fd_skt,&len,sizeof(int)))==-1){ //secondo il protocollo di comunicazione leggo lunghezza path e path
+        //secondo il protocollo di comunicazione leggo lunghezza path e path
+
+        //secondo il protocollo di comunicazione leggo lunghezza path
+        if((nread=readn(fd_skt,&len,sizeof(int)))==-1){ 
             return -1; //setta errno
         }
         if(nread==0){
+            //errore protocollo di comunicazione
             errno=EBADMSG;
             return -1;
         }
@@ -510,18 +648,22 @@ static int leggiNFileinDir(int n, const char* dirname, int fd_skt){
         if(path==NULL){
             return -1;
         }
+        //secondo il protocollo di comunicazione leggo contenuto path
         if((nread=readn(fd_skt,path,len))==-1){
             free(path);
             return -1; //setta errno
         }
         if(nread==0){
+            //errore protocollo di comunicazione
             free(path);
             errno=EBADMSG;
             return -1;
         }
         //secondo il protocollo di comunicazione leggo dimensione file e contenuto
+        
+        //leggo la dimensione del file
         size_t dim;
-        if((nread=readn(fd_skt,&dim,sizeof(size_t)))==-1){ //leggo la dimensione del file
+        if((nread=readn(fd_skt,&dim,sizeof(size_t)))==-1){ 
             return -1;
         }
         if(nread==0){
@@ -531,41 +673,51 @@ static int leggiNFileinDir(int n, const char* dirname, int fd_skt){
         }
         void* buffer=NULL;
         if(dim!=0){
-            buffer=malloc(dim); //alloco un buffer di tale dimensione
+            //alloco un buffer di tale dimensione
+            buffer=malloc(dim); 
             if(buffer==NULL){
                 free(path);
                 return -1;
             }
-            if((nread=readn(fd_skt,buffer,dim))==-1){ //leggo contenuto file
+            //leggo contenuto file
+            if((nread=readn(fd_skt,buffer,dim))==-1){ 
                 free(buffer);
                 free(path);
                 return -1;
             }
             if(nread==0){
+                //errore protocollo di comunicazione
                 free(buffer);
                 free(path);
                 errno=EBADMSG;
                 return -1;
             }
         }
-        if(dirname==NULL){ //non devo salvare i file letti
+        if(dirname==NULL){ 
+            //non devo salvare i file letti
             free(path);
             if(buffer!=NULL)
                 free(buffer);
             continue;
         }
+        //salvo il file che ho letto
         if(scriviContenutoInDirectory(buffer,dim,path,(char*) dirname)==-1){
             fprintf(stderr,"Errore nella scrittura su disco del file %s\n", (char*) path);
-            perror("scriviContenutoInDirectory"); //continuo comunque a salvare i file che posso salvare
+            perror("scriviContenutoInDirectory");
+            notAllFile=1;
+            //continuo comunque a salvare i file che riesco a salvare
         }
         free(path);
         if(buffer!=NULL)
             free(buffer);
     }
+    if(notAllFile==1){
+        errno=EIO;
+        return -1;
+    }
     return 0;
 }
-//scrive il contenuto di buffer nella directory dirToSave: se il pathFile è un path assoluto creerò ricorsivamente delle directory in dirToSave
-//ritorna 0 in caso di successo; -1 in caso di fallimento
+
 int scriviContenutoInDirectory(void* buffer, size_t size, char* pathFile, char* dirToSave){
     FILE* ifp;
     char* dirToCreate = ottieniDirDaPath(pathFile);
@@ -576,19 +728,21 @@ int scriviContenutoInDirectory(void* buffer, size_t size, char* pathFile, char* 
             return -1;
         }
         snprintf(fullPath,PATH_MAX,"%s/%s",dirToSave,dirToCreate);
-        if(mkdir_p(fullPath)==-1){ //creo ricorsivamente le directory in cui salvare il file
+        //creo ricorsivamente le directory in cui salvare il file
+        if(mkdir_p(fullPath)==-1){ 
             return -1;
         }
         free(fullPath);
         free(dirToCreate);
     }
+    //creo il nuovo path del file concantenando dirToSave con il path che il file aveva nel server
     int dimNewPath=strlen(pathFile)+strlen(dirToSave)+1;
     char* newPath=malloc(dimNewPath);
     if(newPath==NULL){
         return -1;
     }
     snprintf(newPath, dimNewPath, "%s%s", dirToSave, pathFile);
-    fprintf(stderr, "%s\n", newPath);
+    //creo il file nel mio file system locale
     if((ifp=fopen(newPath,"wb"))==NULL){
         free(newPath);
         return -1;
@@ -608,20 +762,22 @@ int scriviContenutoInDirectory(void* buffer, size_t size, char* pathFile, char* 
     }
     return 0;
 }
-//ritorna una stringa allocata dinamicamente che contiene il path della directory in cui salvare il file
+
 static char* ottieniDirDaPath(char* path){
     if(path == NULL) {
+        errno = EINVAL;
         return NULL;
     }
+    //faccio una copia del path completo
     int len = strlen(path)+1;
     char* dup = malloc(len);
     if(dup==NULL)
         return NULL;
     strncpy(dup,path,len);
     char* ptr = strrchr(dup, '/');
-    if (ptr==NULL) { //se non ho / il file si trova nella directory corrente
-        free(dup);
-        return NULL;
+    if (ptr==NULL) { 
+        //se non ho / il file si trova nella directory corrente
+        return dup;
     }
     else{
         *ptr='\0'; //elimino il nome del file inserendo un carattere di terminazione stringa
@@ -635,19 +791,8 @@ static struct timespec difftimespec(struct timespec begin, struct timespec end){
     timepass.tv_nsec=end.tv_nsec - begin.tv_nsec;
     return timepass;
 }
-//ritorna 1 se b è avvenuto prima di a
-static int BThenA(struct timespec a,struct timespec b) {
-    if (a.tv_sec == b.tv_sec)
-        return a.tv_nsec > b.tv_nsec;
-    else
-        return a.tv_sec > b.tv_sec;
-}
 
-
-//source: https://gist.github.com/JonathonReinhart/8c0d90191c38af2dcadb102c4e202950
-//crea ricorsivamente le directory a partire dalla working directory
-
-int mkdir_p(const char *path)
+static int mkdir_p(const char *path)
 {
     /* Adapted from http://stackoverflow.com/a/2336245/119527 */
     const size_t len = strlen(path);
