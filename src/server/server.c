@@ -276,16 +276,15 @@ int main(int argc,char** argv){
                     args->fd_daServire = fd;
                     args->pipe = readyDescr[1];
                     int r=addToThreadPool(threadpool,funcW,(void*)args);
-                    // per adesso non riscoltare fd: sarà il worker a notificarti quando rifarlo
-                    FD_CLR(fd,&set); 
-                    if (fd == fd_num) 
-                        fd_num = updatemax(set, fd_num);
-
-                    if(fd_num==-1){
-                        fprintf(stderr, "Nessun fd da ascoltare: errore protocollo interno\n");
-                        exit(EXIT_FAILURE);//errore fatale
-                    }  
                     if(r==0){
+                        // per adesso non riscoltare fd: sarà il worker a notificarti quando rifarlo
+                        FD_CLR(fd,&set); 
+                        if (fd == fd_num) 
+                            fd_num = updatemax(set, fd_num);
+                        if(fd_num==-1){
+                            fprintf(stderr, "Nessun fd da ascoltare: errore protocollo interno\n");
+                            exit(EXIT_FAILURE);//errore fatale
+                        }  
                         continue; //richiesta aggiunta correttemente
                     }
                     if(r<0){

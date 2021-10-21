@@ -371,7 +371,7 @@ static int scanDirectory(char* directory, t_coda* richieste, int n){
                 //hai raggiunto il numero massimo di richieste di scrittura
                 break;
         }
-     }
+    }
     if(errno!=0){
         perror("readdir");
         return -1;

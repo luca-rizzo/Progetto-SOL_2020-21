@@ -246,6 +246,9 @@ int readFile(const char* pathname, void** buf, size_t* size){
     if(dim!=0){
         //alloco un buffer di tale dimensione
         buffer=malloc(dim); 
+        if(!buffer){
+            return -1;
+        }
         //leggo contenuto file
         if(readn(fd_skt,buffer,dim)==-1){ 
             return -1;

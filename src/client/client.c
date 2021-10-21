@@ -12,7 +12,6 @@ static void clean_up ();
 int main(int argc,char** argv){
     config_client config;
     //valori di default configurazione client
-    config.socket=NULL;
     config.millisec=0;
     config.stampaStOut=0;
     config.socket=SOCKNAME;
